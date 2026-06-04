@@ -1,0 +1,41 @@
+/**
+ * Wrangler config for the Hevy MCP server.
+ * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * Secrets (NOT here — set via `wrangler secret put` / `.dev.vars`):
+ *   HEVY_API_KEY   — your Hevy Pro API key (hevy.com/settings?developer)
+ *   MCP_PASSPHRASE — the passphrase that gates the OAuth login
+ */
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hevy-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-10",
+  // global_fetch_strictly_public is one of the two requirements for CIMD (the
+  // other is clientIdMetadataDocumentEnabled:true in src/index.ts); it also
+  // hardens the provider's outbound fetch against SSRF.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "migrations": [
+    {
+      "new_sqlite_classes": ["HevyMCP"],
+      "tag": "v1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "HevyMCP",
+        "name": "MCP_OBJECT"
+      }
+    ]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "f54353b1576f4198badedc122931afb8"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}
