@@ -19,6 +19,10 @@ For ChatGPT's preferred client registration (CIMD), both are required — having
 
 Verify it's on: the AS metadata reports `client_id_metadata_document_supported: true`. DCR is the fallback and works on both clients regardless.
 
+## Icon (connector branding)
+
+The connector-card icon comes from **`logo_uri` in the OAuth discovery metadata** (`/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource`), pointed at an **unauthenticated `/favicon.png`** — NOT the `serverInfo.icons` field (hosts read that only post-connect, with uneven support). `workers-oauth-provider` doesn't expose `logo_uri`, so `index.ts` wraps the provider's `fetch` and injects it into both `.well-known` docs. The PNG is base64-embedded in `src/favicon.ts` — swap that string to change the icon (e.g. a real Hevy logo). Hosts only re-read branding when the connector is **re-added/refreshed**, and icon support is still uneven, so a host may show a generic globe regardless.
+
 ## Secrets — never commit
 
 `HEVY_API_KEY`, `MCP_PASSPHRASE` live in `.dev.vars` (local, gitignored) and `wrangler secret put` (prod). When setting a secret, pipe with `printf '%s'` (no trailing newline — a newline in the passphrase breaks the gate). Before any `git add`, confirm `.dev.vars` is ignored.

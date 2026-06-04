@@ -9,6 +9,7 @@
 import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { Hono } from "hono";
 import { html } from "hono/html";
+import { faviconPngBytes } from "./favicon";
 
 type Bindings = Env & { OAUTH_PROVIDER: OAuthHelpers };
 
@@ -33,7 +34,7 @@ const layout = (body: unknown, title: string) => html`<!doctype html>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>${title}</title>
-      <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+      <link rel="icon" href="/favicon.png" type="image/png" />
       <style>
         body { font-family: system-ui, sans-serif; background: #0f1115; color: #e6e6e6;
                display: flex; min-height: 100vh; margin: 0; align-items: center; justify-content: center; }
@@ -60,13 +61,12 @@ const layout = (body: unknown, title: string) => html`<!doctype html>
     </body>
   </html>`;
 
-// Server/connector icon (a simple dumbbell). Referenced by serverInfo.icons
-// and the page favicon. Served unauthenticated — it's just an icon.
-const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#4f8cff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5v11M3.5 9v6M17.5 6.5v11M20.5 9v6M6.5 12h11"/></svg>`;
-
-app.get("/icon.svg", (c) =>
-  c.body(ICON_SVG, 200, {
-    "content-type": "image/svg+xml",
+// Connector/page icon (dumbbell PNG), served UNAUTHENTICATED. The `logo_uri`
+// in the OAuth metadata (see index.ts) points here — that's what a connector
+// card actually reads for its icon (serverInfo.icons is only read post-connect).
+app.get("/favicon.png", (c) =>
+  c.body(faviconPngBytes(), 200, {
+    "content-type": "image/png",
     "cache-control": "public, max-age=86400",
   }),
 );
