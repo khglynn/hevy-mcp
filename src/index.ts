@@ -52,20 +52,26 @@ const provider = new OAuthProvider({
 // .well-known documents, pointed at the unauthenticated /favicon.png. This is
 // the mechanism real-world connectors use today; serverInfo.icons (above) is
 // the post-connect fallback for clients that read it.
-const BRANDED_METADATA = new Set([
-  "/.well-known/oauth-authorization-server",
-  "/.well-known/oauth-protected-resource",
-]);
+// Match the root forms AND the path-specific variants (RFC 9728/8414) used for
+// a resource at a sub-path — e.g. /.well-known/oauth-protected-resource/mcp,
+// which is exactly where the 401's WWW-Authenticate sends MCP clients for the
+// /mcp resource. An exact match would miss it and the icon wouldn't render.
+function isOAuthMetadataPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/.well-known/oauth-authorization-server") ||
+    pathname.startsWith("/.well-known/oauth-protected-resource")
+  );
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const res = await provider.fetch(request, env, ctx);
     const url = new URL(request.url);
-    if (request.method === "GET" && BRANDED_METADATA.has(url.pathname) && res.ok) {
+    if (request.method === "GET" && isOAuthMetadataPath(url.pathname) && res.ok) {
       try {
         const meta = (await res.clone().json()) as Record<string, unknown>;
         meta.logo_uri = `${url.origin}/favicon.png`;
-        if (url.pathname.endsWith("authorization-server")) {
+        if (url.pathname.includes("authorization-server")) {
           meta.service_documentation = `${url.origin}/`;
         }
         const headers = new Headers(res.headers);
