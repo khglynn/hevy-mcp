@@ -21,7 +21,9 @@ Verify it's on: the AS metadata reports `client_id_metadata_document_supported: 
 
 ## Icon (connector branding)
 
-The connector-card icon comes from **`logo_uri` in the OAuth discovery metadata** (`/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource`), pointed at an **unauthenticated `/favicon.png`** — NOT the `serverInfo.icons` field (hosts read that only post-connect, with uneven support). `workers-oauth-provider` doesn't expose `logo_uri`, so `index.ts` wraps the provider's `fetch` and injects it into both `.well-known` docs. The PNG is base64-embedded in `src/favicon.ts` — swap that string to change the icon (e.g. a real Hevy logo). Hosts only re-read branding when the connector is **re-added/refreshed**, and icon support is still uneven, so a host may show a generic globe regardless.
+The connector-card icon comes from **`logo_uri` in the OAuth discovery metadata** (`/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource`), pointed at an **unauthenticated `/favicon.png`** — NOT the `serverInfo.icons` field (hosts read that only post-connect, with uneven support). `workers-oauth-provider` doesn't expose `logo_uri`, so `index.ts` wraps the provider's `fetch` and injects it into the discovery docs — matching paths by **prefix** so the path-specific `oauth-protected-resource/mcp` (where the 401's `WWW-Authenticate` sends clients) is branded too. The PNG is base64-embedded in `src/favicon.ts` — swap that string to change the icon.
+
+**Status (2026-06-04): implemented + verified server-side, but Claude still shows a globe for this connector — UNRESOLVED.** Likely Claude's host support is incomplete (the source PR warns icon support is uneven), or a re-add caching nuance (a test re-add didn't re-prompt for the passphrase, so cached state may not have re-fetched metadata; a fully clean re-add or a different account might surface it). Mechanism left in place (correct + future-proof).
 
 ## Secrets — never commit
 
