@@ -12,7 +12,15 @@ import authApp from "./auth";
 import { registerHevyTools } from "./mcp";
 
 export class HevyMCP extends McpAgent<Env> {
-  server = new McpServer({ name: "hevy-mcp", version: "0.1.0" });
+  // `title` + `icons` are per the MCP 2025-11 spec. Claude doesn't render
+  // connector icons yet (anthropics/claude-ai-mcp#152) but other clients can,
+  // and it's ready for when they ship support. Icon is served at /icon.svg.
+  server = new McpServer({
+    name: "hevy-mcp",
+    version: "0.1.0",
+    title: "Hevy",
+    icons: [{ src: "/icon.svg", mimeType: "image/svg+xml", sizes: ["any"] }],
+  });
 
   async init() {
     registerHevyTools(this.server, this.env);

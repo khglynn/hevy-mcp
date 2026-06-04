@@ -31,7 +31,18 @@ function fail(e: unknown) {
   return { content: [{ type: "text" as const, text: `Error: ${msg}` }], isError: true };
 }
 
-/** Register a tool whose handler is auto-wrapped with ok()/fail(). */
+/** "get_workout_count" -> "Get workout count" for a readable display title. */
+function titleCase(name: string): string {
+  const s = name.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * Register a tool whose handler is auto-wrapped with ok()/fail(). Read/write
+ * is derived from the name prefix and exposed via annotations, so MCP clients
+ * (Claude, ChatGPT) can group reads vs writes and auto-run read-only tools
+ * without an approval prompt.
+ */
 function reg<S extends z.ZodRawShape>(
   server: McpServer,
   name: string,
@@ -39,6 +50,8 @@ function reg<S extends z.ZodRawShape>(
   shape: S,
   handler: (args: z.infer<z.ZodObject<S>>) => Promise<unknown>,
 ) {
+  const readOnly = /^(get_|search_)/.test(name);
+  const destructive = /^update_/.test(name); // update_workout overwrites; creates are additive
   const callback = async (args: any) => {
     try {
       return ok(await handler(args));
@@ -49,7 +62,16 @@ function reg<S extends z.ZodRawShape>(
   // Cast only at this boundary: the generic wrapper above erases the exact
   // arg/return types the SDK's registerTool callback expects. The runtime
   // shape (ok()/fail()) is a valid CallToolResult.
-  server.registerTool(name, { description, inputSchema: shape }, callback as never);
+  server.registerTool(
+    name,
+    {
+      title: titleCase(name),
+      description,
+      inputSchema: shape,
+      annotations: { readOnlyHint: readOnly, destructiveHint: readOnly ? false : destructive },
+    },
+    callback as never,
+  );
 }
 
 // ---------- shared schemas (match the Hevy OpenAPI spec) ----------
