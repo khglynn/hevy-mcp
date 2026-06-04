@@ -101,7 +101,14 @@ app.post("/approve", async (c) => {
   }
   if (!oauthReqInfo) return c.html(layout(html`<p class="err">Invalid authorization request.</p>`, "Hevy MCP"), 400);
 
-  if (!constantTimeEqual(passphrase, c.env.MCP_PASSPHRASE)) {
+  // Fail CLOSED: if the secret binding is missing/empty, reject everything.
+  // (Without this, an empty submitted passphrase would match an empty/undefined
+  // expected value and the gate would fail open.)
+  const expected = c.env.MCP_PASSPHRASE;
+  if (!expected) {
+    console.warn("MCP_PASSPHRASE is not set — rejecting all authorization attempts.");
+  }
+  if (!expected || !passphrase || !constantTimeEqual(passphrase, expected)) {
     return c.html(loginScreen(oauthReqInfo, "Incorrect passphrase."), 401);
   }
 
