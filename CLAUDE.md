@@ -1,6 +1,6 @@
 # hevy-mcp — Agent Instructions
 
-**Last verified:** 2026-06-03
+**Last verified:** 2026-08-29
 
 A Cloudflare Worker MCP server wrapping the Hevy workout API. Part of the `self-hosted-mcps` collection (see the parent CLAUDE.md for the meta-repo pattern). This is its own repo: `khglynn/hevy-mcp`.
 
@@ -10,6 +10,7 @@ A Cloudflare Worker MCP server wrapping the Hevy workout API. Part of the `self-
 
 - **Auth is self-issued.** It's real OAuth 2.1 + PKCE (so Claude and ChatGPT both accept it), but the only credential is `MCP_PASSPHRASE`. No third-party IdP.
 - **Single Hevy key.** Every authorized user (just Kevin) shares the server-side `HEVY_API_KEY`. The OAuth gate decides *who can connect*; the Hevy key decides *what they reach* (Kevin's account).
+- **Access tokens live 90 days** (`accessTokenTTL` in `src/index.ts`, set 2026-08-29). The library default (1 hour) plus unreliable client-side silent refresh meant Kevin re-entered the passphrase nearly every Claude Code session. Refresh tokens keep the library default (no expiry). Tradeoff accepted knowingly: a leaked bearer token is live for up to 90 days, against a single-user server fronting gym data — if that calculus changes, this is the knob.
 
 ## CIMD needs TWO things (easy to half-do)
 
@@ -29,9 +30,17 @@ The connector-card icon comes from **`logo_uri` in the OAuth discovery metadata*
 
 `HEVY_API_KEY`, `MCP_PASSPHRASE` live in `.dev.vars` (local, gitignored) and `wrangler secret put` (prod). When setting a secret, pipe with `printf '%s'` (no trailing newline — a newline in the passphrase breaks the gate). Before any `git add`, confirm `.dev.vars` is ignored.
 
-## Deploy = personal Cloudflare, token unset
+## Deploy = personal Cloudflare, qualified token
 
-This deploys to `kevin@trimm.co`'s personal account. An unlabeled `CLOUDFLARE_API_TOKEN` may be exported in the shell — it overrides the browser login and is of unknown account. **Always prefix wrangler with `env -u CLOUDFLARE_API_TOKEN`**, and run `wrangler whoami` to confirm the account before deploying. Never deploy this to a Tecovas account.
+This deploys to `kevin@trimm.co`'s personal account. Since the 2026-07-27 account split, `~/.env` carries only account-qualified names — use the personal pair explicitly and confirm before deploying:
+
+```bash
+source ~/.env && export CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN_PERSONAL" CLOUDFLARE_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID_PERSONAL"
+npx wrangler whoami   # must say Kevin@trimm.co before any deploy
+npx wrangler deploy
+```
+
+Browser OAuth login may be absent on a given machine (it was 2026-08-29); the qualified token path works regardless. Never deploy this to a Tecovas account. *(Superseded guidance: the old "always `env -u CLOUDFLARE_API_TOKEN`" rule guarded against a pre-split unqualified token of unknown account; that ambient export no longer exists.)*
 
 ## Hevy API realities (baked into hevy.ts)
 

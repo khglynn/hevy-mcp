@@ -44,6 +44,12 @@ const provider = new OAuthProvider({
   // AND the global_fetch_strictly_public compat flag in wrangler.jsonc. Clients
   // that don't use CIMD fall back to Dynamic Client Registration automatically.
   clientIdMetadataDocumentEnabled: true,
+  // 90-day access tokens (default is 1 hour). Single-user personal server:
+  // hour-long tokens meant a re-auth prompt nearly every session because
+  // clients' silent refresh proved unreliable here. Refresh tokens are left
+  // at the library default (no expiry), so refresh still works where clients
+  // do it right; this just stops the constant re-auth when they don't.
+  accessTokenTTL: 90 * 24 * 60 * 60,
 });
 
 // Connector-card branding. Hosts (Claude, ChatGPT) read `logo_uri` from the
