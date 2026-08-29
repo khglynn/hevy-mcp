@@ -22,9 +22,11 @@ Verify it's on: the AS metadata reports `client_id_metadata_document_supported: 
 
 ## Icon (connector branding)
 
-The connector-card icon comes from **`logo_uri` in the OAuth discovery metadata** (`/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource`), pointed at an **unauthenticated `/favicon.png`** — NOT the `serverInfo.icons` field (hosts read that only post-connect, with uneven support). `workers-oauth-provider` doesn't expose `logo_uri`, so `index.ts` wraps the provider's `fetch` and injects it into the discovery docs — matching paths by **prefix** so the path-specific `oauth-protected-resource/mcp` (where the 401's `WWW-Authenticate` sends clients) is branded too. The PNG is base64-embedded in `src/favicon.ts` — swap that string to change the icon.
+**Status (re-researched 2026-08-29; supersedes the 2026-06-04 note):** every server-declared lever — `serverInfo.icons` (SEP-973), `logo_uri` in the OAuth discovery metadata, a served `/favicon.png` — is confirmed **non-functional for Claude's connector-card icon** (claude.ai issue #152: 85 comments, zero Anthropic replies; Claude Code: 3+ icon feature requests stale-bot-closed, nothing in the changelog). The levers that ARE real, per the LESSONS.md research in the parent repo (2026-08-10) + fresh verification:
+- **claude.ai parent-domain fallback** — a connector served from a `kevinhg.com` subdomain inherits the kevinhg.com site icon on the connect/auth screens (observed live with spotify-mcp). Getting this here means a Workers custom domain (e.g. `hevy-mcp.kevinhg.com`) — a kevinhg.com DNS change, Kevin's call, and the connector URL changes with it.
+- **VS Code renders `serverInfo.icons` today** — the one mainstream host that ships SEP-973.
 
-**Status (2026-06-04): implemented + verified server-side, but Claude still shows a globe for this connector — UNRESOLVED.** Likely Claude's host support is incomplete (the source PR warns icon support is uneven), or a re-add caching nuance (a test re-add didn't re-prompt for the passphrase, so cached state may not have re-fetched metadata; a fully clean re-add or a different account might surface it). Mechanism left in place (correct + future-proof).
+So the plumbing stays exactly as built (spec-correct, future-proof): `serverInfo.icons` in `index.ts`, `logo_uri` injected into both `.well-known` docs by prefix-matching (covers the path-specific `oauth-protected-resource/mcp` the 401's `WWW-Authenticate` points at), PNG base64-embedded in `src/favicon.ts`. **The embedded PNG is Kevin's own mark as of 2026-08-29** (was Hevy's app icon before); swap that one string to change it.
 
 ## Secrets — never commit
 
