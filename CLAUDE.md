@@ -41,7 +41,7 @@ Never deploy this to a Tecovas account. `wrangler.jsonc` carries the custom doma
 
 ## Testing
 
-`npm run test:smoke` against `wrangler dev` (43 checks; see `test/smoke.mjs`). With `HEVY_API_KEY` it walks the whole path: DCR, `/authorize`, `/approve`, code exchange, refresh, MCP `initialize`, `tools/list` for both grant kinds, a real Hevy read, and revocation; admin runs whenever `OWNER_TOKEN` is set. CI runs the 43 unauthenticated checks on push. A weekly canary hits production discovery and the 401 via the repo variable `CANARY_BASE`; GitHub silently disables scheduled workflows after 60 days without a commit, so re-enable it from the Actions tab (or `workflow_dispatch`) when the repo has been quiet.
+`npm run test:smoke` against `wrangler dev` (43 checks; see `test/smoke.mjs`). With `HEVY_API_KEY` it walks the whole path: DCR, `/authorize`, `/approve`, code exchange, refresh, MCP `initialize`, `tools/list` for both grant kinds, a real Hevy read, and revocation; admin runs whenever `OWNER_TOKEN` is set. CI runs the 26 unauthenticated checks on push. A weekly canary hits production discovery and the 401 via the repo variable `CANARY_BASE`; GitHub silently disables scheduled workflows after 60 days without a commit, so re-enable it from the Actions tab (or `workflow_dispatch`) when the repo has been quiet.
 
 `wrangler kv key list` returned `[]` for the live namespace while the REST API showed keys (2026-09-01). Inventory KV through the API.
 

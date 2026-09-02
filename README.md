@@ -50,7 +50,7 @@ npm run type-check
 INVITE=<value from .dev.vars> OWNER_TOKEN=<value> HEVY_API_KEY=<your key> npm run test:smoke
 ```
 
-The smoke test runs 43 checks against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 43 unauthenticated checks, which is what CI runs on every push.
+The smoke test runs 43 checks against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 26 unauthenticated checks, which is what CI runs on every push.
 
 ## How it works
 
