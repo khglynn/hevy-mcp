@@ -146,8 +146,9 @@ const layout = (body: unknown, title: string, page: string) => html`<!doctype ht
         .strip a { white-space: nowrap; }
         sup a { text-decoration: none; color: var(--tape); font-weight: 700; }
         .preview { margin: 0 0 18px; }
-        .tip { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 16px; letter-spacing: .06em; text-transform: uppercase; color: var(--ash); text-decoration: none; }
-        .tip:hover { color: var(--tape); }
+        .tip { margin-top: 8px; color: var(--ash); font-size: 15px; }
+        .tip a { color: var(--ash); text-decoration: underline; text-decoration-color: var(--edge); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+        .tip a:hover { color: var(--tape); text-decoration-color: var(--tape); }
         table { width: 100%; border-collapse: collapse; font-size: 15px; }
         th { font-family: "Barlow Condensed", sans-serif; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ash); font-size: 15px; }
         th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--edge); vertical-align: top; }
@@ -211,7 +212,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
       <section class="strip">
         <p id="any-ai">* Claude on the web, desktop, or Claude Code. Also ChatGPT (full access on Business, Enterprise, and Edu; read-only on Pro) and Cursor: add the same address in that app.</p>
         <p>This server runs on ${operator}'s Cloudflare account. It stores your key in encrypted form and uses it only to reach Hevy for you. ${operator} could technically read the key. To leave, tell Claude "disconnect from Hevy" or revoke the key on Hevy's Developer page. <a href="/privacy">See what's stored and for how long →</a></p>
-        ${tip ? html`<a class="tip" href="${tip}" target="_blank" rel="noopener noreferrer">☕ Built by ${operator}. Buy him a coffee</a>` : ""}
+        ${tip ? html`<p class="tip">Built by ${operator}. <a href="${tip}" target="_blank" rel="noopener noreferrer">Buy him a coffee?</a></p>` : ""}
       </section>
       <script nonce="${nonce}">
         (function () {
@@ -266,7 +267,7 @@ app.get("/privacy", (c) => {
         <p>Removing the connection inside Claude does not delete the stored key.</p>
         <section class="strip">
           <p><a href="/start">← Back to the start page</a></p>
-          ${tip ? html`<a class="tip" href="${tip}" target="_blank" rel="noopener noreferrer">☕ Buy ${operator} a coffee</a>` : ""}
+          ${tip ? html`<p class="tip">Built by ${operator}. <a href="${tip}" target="_blank" rel="noopener noreferrer">Buy him a coffee?</a></p>` : ""}
         </section>`,
       "What this server keeps",
       "privacy",
@@ -311,8 +312,8 @@ function connectPage(o: ConnectPageOpts) {
           : ""}
         <fieldset>
           <legend>Choose access</legend>
-          <label class="opt"><input type="radio" name="can_write" value="" ${o.canWrite ? "" : "checked"} /><span>Read only<small>${o.client} can view your workouts, routines, and measurements but can't change them.</small></span></label>
-          <label class="opt"><input type="radio" name="can_write" value="on" ${o.canWrite ? "checked" : ""} /><span>Read + write<small>${o.client} can also log workouts and build routines. Hevy has no undo. Editing a saved workout replaces what was there.</small></span></label>
+          <label class="opt"><input type="radio" name="can_write" value="on" ${o.canWrite === false ? "" : "checked"} /><span>Read + write<small>${o.client} can log workouts and build routines as well as read them. Hevy has no undo. Editing a saved workout replaces what was there.</small></span></label>
+          <label class="opt"><input type="radio" name="can_write" value="" ${o.canWrite === false ? "checked" : ""} /><span>Read only<small>${o.client} can view your workouts, routines, and measurements but can't change them.</small></span></label>
         </fieldset>
         <button type="submit" class="btn wide" id="submit" ${o.preview ? "disabled" : ""}>Connect</button>
       </form>
@@ -401,7 +402,7 @@ function successPage(name: string, redirectTo: string, canWrite: boolean, client
       <h2>Connected as ${name || "your Hevy account"}</h2>
       <p>${canWrite ? `You can now ask ${client} to read your workouts and add or edit them.` : `${client} can now read your workouts. To let it add or edit them, reconnect and choose Read + write.`}</p>
       <p class="fine">Returning to ${client}… If nothing happens, <a href="${redirectTo}">continue</a>. Wrong Hevy account? <a href="/start">Start over</a>.</p>
-      ${tip ? html`<a class="tip" href="${tip}" target="_blank" rel="noopener noreferrer">☕ Useful? Buy ${operator} a coffee</a>` : ""}`,
+      ${tip ? html`<p class="tip">Built by ${operator}. <a href="${tip}" target="_blank" rel="noopener noreferrer">Buy him a coffee?</a></p>` : ""}`,
     "Connected",
     "connected",
   );
