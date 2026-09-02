@@ -51,9 +51,12 @@
     { "name": "APPROVE_RL", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } },
     { "name": "ADMIN_RL", "namespace_id": "2002", "simple": { "limit": 10, "period": 60 } }
   ],
-  // The published URL. Cloudflare creates the DNS record on deploy; the
-  // workers.dev hostname keeps working alongside it.
+  // The published URL. Cloudflare creates the DNS record on deploy. The
+  // workers.dev hostname stays enabled so connectors registered against it
+  // keep working (both hostnames are valid OAuth issuers).
   "routes": [{ "pattern": "hevy.kevinhg.com", "custom_domain": true }],
+  "workers_dev": true,
+  "preview_urls": false,
   "observability": {
     "enabled": true
   }
