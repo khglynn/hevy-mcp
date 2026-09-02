@@ -141,7 +141,10 @@ const layout = (body: unknown, title: string, page: string) => html`<!doctype ht
         #mobile { display: none; }
 
         .strip { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--edge); }
-        .strip p { color: var(--ash); font-size: 15px; }
+        .strip p { color: var(--ash); font-size: 15px; max-width: none; }
+        .strip a { white-space: nowrap; }
+        sup a { text-decoration: none; color: var(--tape); font-weight: 700; }
+        .preview { margin: 0 0 18px; }
         table { width: 100%; border-collapse: collapse; font-size: 15px; }
         th { font-family: "Barlow Condensed", sans-serif; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ash); font-size: 15px; }
         th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--edge); vertical-align: top; }
@@ -169,7 +172,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
   return layout(
     html`<div class="eyebrow">Hevy → Claude</div>
       <h1>Connect Hevy<br />to Claude.</h1>
-      <p class="lede">Use your own Hevy account to check workout history, build routines, or log a session through Claude.</p>
+      <p class="lede">Build routines, add exercises, log workouts, and pull your whole Hevy history into any<sup><a href="#any-ai">*</a></sup> AI assistant.</p>
       ${inviteState === "ok" ? html`<div class="banner ok">Invite saved. Follow the steps below.</div>` : ""}
       ${inviteState === "bad" ? html`<div class="banner err">This invite link isn't right. Open the original link exactly as it was sent to you.</div>` : ""}
       <div id="mobile" class="banner note">Open this link on a computer. You can't finish setup on a phone.</div>
@@ -188,7 +191,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
         <li class="step">
           <span class="plate">2</span>
           <div class="body">
-            <h2>Add it to Claude</h2>
+            <h2>Add the connector to Claude</h2>
             <p>In Claude, go to <b>Customize → Connectors → + → Add custom connector</b>. Paste the address below. Claude fills in the sign-in settings; keep the defaults and continue.</p>
             <div class="url"><code id="mcpurl">${origin}/mcp</code><button class="copy" id="copy" type="button">Copy</button></div>
             <p class="fine">Personal Claude plans work, including Free, which allows one custom connector. On Team or Enterprise, an Owner must add it first under Organization settings → Connectors. Set it up on the web or desktop app; then you can use it on your phone.</p>
@@ -204,8 +207,8 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
       </ol>
 
       <section class="strip">
+        <p id="any-ai">* Claude on the web, desktop, or Claude Code. Also ChatGPT (full access on Business, Enterprise, and Edu; read-only on Pro) and Cursor: add the same address in that app.</p>
         <p>This server runs on ${operator}'s Cloudflare account. It stores your key in encrypted form and uses it only to reach Hevy for you. ${operator} could technically read the key. To leave, tell Claude "disconnect from Hevy" or revoke the key on Hevy's Developer page. <a href="/privacy">See what's stored and for how long →</a></p>
-        <p>Using ChatGPT, Claude Code, or Cursor? Add the same address in that app.</p>
       </section>
       <script nonce="${nonce}">
         (function () {
@@ -275,6 +278,8 @@ interface ConnectPageOpts {
   nonce: string;
   error?: string;
   canWrite?: boolean;
+  /** Render-only: the button is disabled and a banner says so. */
+  preview?: boolean;
 }
 
 function connectPage(o: ConnectPageOpts) {
@@ -283,6 +288,7 @@ function connectPage(o: ConnectPageOpts) {
     html`<div class="eyebrow">Hevy → ${o.client}</div>
       <h1>Connect Hevy<br />to ${o.client}.</h1>
       <p class="lede">You're connecting <b>${who}</b> to your own Hevy account. No one else's account is involved.</p>
+      ${o.preview ? html`<div class="banner note preview">Preview only. The real version of this page opens from ${o.client} when you add the connector.</div>` : ""}
       ${o.error ? html`<div class="banner err">${o.error}</div>` : ""}
       <form action="/approve" method="POST" id="f">
         <input type="hidden" name="oauthReqInfo" value="${JSON.stringify(o.req)}" />
@@ -303,7 +309,7 @@ function connectPage(o: ConnectPageOpts) {
           <label class="opt"><input type="radio" name="can_write" value="" ${o.canWrite ? "" : "checked"} /><span>Read only<small>${o.client} can view your workouts, routines, and measurements but can't change them.</small></span></label>
           <label class="opt"><input type="radio" name="can_write" value="on" ${o.canWrite ? "checked" : ""} /><span>Read + write<small>${o.client} can also log workouts and build routines. Hevy has no undo. Editing a saved workout replaces what was there.</small></span></label>
         </fieldset>
-        <button type="submit" class="btn wide" id="submit">Connect</button>
+        <button type="submit" class="btn wide" id="submit" ${o.preview ? "disabled" : ""}>Connect</button>
       </form>
       <section class="strip">
         <p>This server stores your key in encrypted form and uses it only to reach Hevy for you. ${o.operator} runs the server and could technically read the key. To leave, tell ${who} "disconnect from Hevy" or revoke the key on Hevy's Developer page. <a href="/privacy">See what's stored and for how long →</a></p>
@@ -339,6 +345,15 @@ const refusalPage = (operator: string) =>
     "App not recognised",
     "refused",
   );
+
+/** A render-only look at the consent page, for design review. */
+app.get("/preview/connect", (c) => {
+  const origin = new URL(c.req.url).origin;
+  const req = { responseType: "code", clientId: "preview", redirectUri: "https://claude.ai/api/mcp/auth_callback", scope: [], state: "preview" } as unknown as AuthRequest;
+  return c.html(
+    connectPage({ origin, client: "Claude", req, showInvite: false, operator: operatorName(c.env), nonce: c.get("nonce"), preview: true }),
+  );
+});
 
 app.get("/authorize", async (c) => {
   const origin = new URL(c.req.url).origin;
