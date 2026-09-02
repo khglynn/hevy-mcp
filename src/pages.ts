@@ -58,7 +58,7 @@ app.use("*", async (c, next) => {
   await next();
   c.header(
     "Content-Security-Policy",
-    `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`,
+    `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`,
   );
   if (!c.req.path.startsWith("/favicon")) c.header("Cache-Control", "no-store");
 });
