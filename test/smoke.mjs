@@ -246,10 +246,10 @@ async function main() {
 
   // Re-authorizing the same client replaces its previous grant
   // (revokeExistingGrants, the library default) — so the first token is dead now.
-  // Production KV is eventually consistent, so a just-revoked token can answer
-  // 200 for up to a minute at another edge; poll before judging.
+  // Production KV serves reads from an edge cache for up to 60s, so a
+  // just-revoked token can keep answering 200 for that long; poll past it.
   let stale = await rpc("tools/list", {}, 6);
-  for (let i = 0; i < 8 && stale.status !== 401; i++) {
+  for (let i = 0; i < 15 && stale.status !== 401; i++) {
     await new Promise((r) => setTimeout(r, 5000));
     stale = await rpc("tools/list", {}, 6);
   }
