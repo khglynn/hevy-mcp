@@ -544,6 +544,7 @@ app.post("/approve", async (c) => {
     return again(describeHevyFailure(e), credentialProblem ? 401 : 503);
   }
 
+  // The OAuth user id (`hevy_` + hash of Hevy's id), the first segment of every token; see HevyProps.hevyUserId.
   const userId = await deriveUserId(user.id);
   const memberRecordKey = `member:${userId}`;
   const existing = await c.env.OAUTH_KV.get<{ firstConnectedAt?: string }>(memberRecordKey, "json");
@@ -647,25 +648,30 @@ interface GrantRecord {
   metadata?: { name?: string; client?: string; canWrite?: boolean; connectedAt?: string };
 }
 
-async function listPrefix<T>(kv: KVNamespace, prefix: string): Promise<T[]> {
-  const out: T[] = [];
+/** Grants accumulate (reconnects add, nothing prunes until expiry), so the admin page reads in parallel and stops at a cap. */
+const ADMIN_LIST_CAP = 500;
+async function listPrefix<T>(kv: KVNamespace, prefix: string): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
   let cursor: string | undefined;
+  let truncated = false;
   do {
-    const page = await kv.list({ prefix, cursor });
-    for (const k of page.keys) {
-      const v = await kv.get<T>(k.name, "json");
-      if (v) out.push(v);
-    }
+    const page = await kv.list({ prefix, cursor, limit: 100 });
+    const values = await Promise.all(page.keys.map((k) => kv.get<T>(k.name, "json")));
+    for (const v of values) if (v) items.push(v);
     cursor = page.list_complete ? undefined : page.cursor;
+    if (items.length >= ADMIN_LIST_CAP && cursor) {
+      truncated = true;
+      break;
+    }
   } while (cursor);
-  return out;
+  return { items, truncated };
 }
 
 app.get("/admin", async (c) => {
   if (!c.env.OWNER_TOKEN) return c.notFound();
   if (!(await ownerOk(c))) return c.redirect("/admin/login");
 
-  const grants = await listPrefix<GrantRecord>(c.env.OAUTH_KV, "grant:");
+  const { items: grants, truncated } = await listPrefix<GrantRecord>(c.env.OAUTH_KV, "grant:");
   grants.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   const inviteOn = !!c.env.MCP_INVITE_CODE;
   const rows = grants.map(
@@ -690,7 +696,7 @@ app.get("/admin", async (c) => {
     layout(
       html`<div class="eyebrow">Hevy → Claude · owner</div>
         <h1>Connected accounts</h1>
-        <p class="fine">Connected apps: ${grants.length}. <b>Disconnect app</b> disconnects that app and deletes the key stored with that connection; the person can reconnect from /start. <b>Remove person</b> disconnects all of their apps and forgets their account${inviteOn ? ", so they will need the invite link to reconnect" : ""}.</p>
+        <p class="fine">Connections: ${grants.length}${truncated ? ` (showing the first ${ADMIN_LIST_CAP})` : ""}; a person who reconnected an app appears once per connection. <b>Disconnect app</b> disconnects that app and deletes the key stored with that connection; the person can reconnect from /start. <b>Remove person</b> disconnects all of their apps and forgets their account${inviteOn ? ", so they will need the invite link to reconnect" : ""}.</p>
         <div style="overflow-x:auto;margin-top:18px">
           <table>
             <thead><tr><th>Who</th><th>App</th><th>Access</th><th>Since</th><th></th></tr></thead>

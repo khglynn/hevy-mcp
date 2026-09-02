@@ -64,7 +64,7 @@ npm run type-check
 INVITE=<value from .dev.vars> OWNER_TOKEN=<value> HEVY_API_KEY=<your key> npm run test:smoke
 ```
 
-The smoke test runs 57 checks (it prints the count it ran) against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the unauthenticated checks (the count it prints), which is what CI runs on every push.
+The smoke test runs 58 checks (it prints the count it ran) against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the unauthenticated checks (the count it prints), which is what CI runs on every push.
 
 ## How it works
 
@@ -86,8 +86,8 @@ Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶
 
 | | Tool | Notes |
 |---|---|---|
-| account | `whoami` | Which Hevy account, which client, read or write |
-| account | `disconnect` | Revokes this app's connection; `everywhere: true` revokes every app connected to this Hevy account and forgets every key it stored |
+| account | `whoami`, `list_connections` | Which Hevy account, which client, read or write; every connection on the account with its id |
+| account | `disconnect` | Revokes this app's connection; `connection_id` picks another one from the list; `everywhere: true` revokes every app connected to this Hevy account and forgets every key it stored |
 | write | `create_body_measurement` | Weights in kg, circumferences in centimetres (field names carry the unit) |
 | read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_routine_folder`, `get_exercise_template`, `get_exercise_history`, `get_body_measurements`, `get_body_measurement` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
 | read | `get_workout_events` | Workouts updated or deleted since a date, newest first: the delta feed for keeping a cached copy current without re-reading every page |

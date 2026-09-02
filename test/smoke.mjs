@@ -302,6 +302,12 @@ async function main() {
   check("update_routine is marked destructive, not read-only", byName.update_routine?.annotations?.destructiveHint === true && byName.update_routine?.annotations?.readOnlyHint === false, JSON.stringify(byName.update_routine?.annotations));
   check("get_workout_events is marked read-only", byName.get_workout_events?.annotations?.readOnlyHint === true, JSON.stringify(byName.get_workout_events?.annotations));
   const events = await rpc2("tools/call", { name: "get_workout_events", arguments: { pageSize: 1 } }, 13);
+  const { result: conns, note: connsNote } = await settles(
+    () => rpc2("tools/call", { name: "list_connections", arguments: {} }, 14),
+    (r) => r.status === 200 && (r.body?.result?.content?.[0]?.text ?? "").includes('"this_app": true'),
+    (r) => r.status === 200,
+  );
+  check(`list_connections shows this connection${connsNote}`, conns.status === 200 && (conns.body?.result?.content?.[0]?.text ?? "").includes('"this_app": true'), conns.raw);
   check("get_workout_events reaches Hevy (events array)", events.status === 200 && (events.body?.result?.content?.[0]?.text ?? "").includes('"events"'), events.raw);
 
   const bye = await rpc2("tools/call", { name: "disconnect", arguments: {} }, 7);

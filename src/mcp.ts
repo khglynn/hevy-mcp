@@ -27,6 +27,11 @@ export interface HevyProps {
   hevyApiKey: string;
   /** Non-secret fingerprint of the key; also in grant metadata so a dead key revokes only its own grants. */
   keyFingerprint: string;
+  /**
+   * The OAuth user id: `hevy_` + 32 hex of SHA-256 over Hevy's own user id
+   * (`deriveUserId`), never Hevy's id itself. It is also the first segment of
+   * every token this provider mints, which the per-app disconnect relies on.
+   */
   hevyUserId: string;
   name: string;
   canWrite: boolean;
@@ -176,7 +181,7 @@ function reg<S extends z.ZodRawShape>(
   shape: S,
   handler: (args: z.infer<z.ZodObject<S>>, hevy: HevyClient) => Promise<unknown>,
 ) {
-  const readOnly = /^(get_|search_|whoami)/.test(name);
+  const readOnly = /^(get_|search_|list_|whoami)/.test(name);
   const destructive = /^(update_|disconnect)/.test(name); // update_workout overwrites; creates are additive
   const callback = async (args: any) => {
     try {
@@ -294,28 +299,72 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "disconnect",
-    "Disconnect this app from Hevy. Revokes this connection only; other apps connected to the same Hevy account keep working. Pass everywhere=true to disconnect every app connected to this Hevy account and delete every stored key for it. Ask the person before doing this.",
+    "Disconnect this app from Hevy. Revokes this connection only; other apps connected to the same Hevy account keep working. Pass connection_id (from list_connections) to disconnect a different connection, or everywhere=true to disconnect every app connected to this Hevy account and delete every stored key for it. Ask the person before doing this.",
     {
       everywhere: z.boolean().optional().describe("true: disconnect every app connected to this Hevy account and delete every stored key for it. Default: only this app."),
+      connection_id: z.string().optional().describe("A connection id from list_connections, to disconnect that connection instead of this one."),
     },
-    async ({ everywhere }) => {
-      if (!everywhere && ctx.grant) {
-        // This call's own token record first (a direct delete, so it is gone
-        // at the origin right away), then the grant, which also removes the
-        // refresh token and lists the grant's other access tokens (best
-        // effort). The edge cache can still honour the old token for up to a
-        // minute; nothing renews it after that.
-        await ctx.env.OAUTH_KV.delete(ctx.grant.tokenKey);
-        await ctx.env.OAUTH_PROVIDER.revokeGrant(ctx.grant.id, ctx.props.hevyUserId);
-        log("user.disconnected", { userId: ctx.props.hevyUserId, scope: "app", client: ctx.props.client });
-        return `Disconnected this app. Other apps connected with the same key keep working; ask to "disconnect from Hevy everywhere" to remove them all. Reconnect anytime: ${ctx.origin}/start`;
+    async ({ everywhere, connection_id }) => {
+      const userId = ctx.props.hevyUserId;
+      if (everywhere) {
+        const { revoked, keysForgotten } = await forgetPerson(ctx.env, userId);
+        log("user.disconnected", { userId, revoked, keysForgotten, scope: "everywhere" });
+        const inviteNote = ctx.env.MCP_INVITE_CODE ? " You will need an invite link to reconnect." : "";
+        return `Disconnected everywhere. Removed ${revoked} app connection(s). This server deleted every stored key for this Hevy account and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
       }
-      // Asked for everywhere, or a bearer this server could not tie to one grant.
-      const { revoked, keysForgotten } = await forgetPerson(ctx.env, ctx.props.hevyUserId);
-      log("user.disconnected", { userId: ctx.props.hevyUserId, revoked, keysForgotten, scope: "everywhere", unresolvedGrant: !ctx.grant });
-      const legacyNote = everywhere ? "" : " (This connection could not be matched to one app, so every app was removed.)";
-      const inviteNote = ctx.env.MCP_INVITE_CODE ? " You will need an invite link to reconnect." : "";
-      return `Disconnected everywhere. Removed ${revoked} app connection(s).${legacyNote} This server deleted every stored key for this Hevy account and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
+      if (connection_id && connection_id !== ctx.grant?.id) {
+        // Grant records are keyed by this person's user id, so an id copied
+        // from someone else's list cannot reach their connection.
+        if ((await ctx.env.OAUTH_KV.get(`grant:${userId}:${connection_id}`)) === null) {
+          return errorResult("No connection with that id on this Hevy account. Run list_connections and use one of its connection ids.");
+        }
+        await ctx.env.OAUTH_PROVIDER.revokeGrant(connection_id, userId);
+        log("user.disconnected", { userId, scope: "other", client: ctx.props.client });
+        return `Disconnected connection …${connection_id.slice(-6)}. This app's own connection is untouched.`;
+      }
+      if (!ctx.grant) {
+        // Fail closed: a destructive action must not widen on its own.
+        return errorResult("This connection could not be matched to one app, so nothing was changed. Ask again with everywhere=true to remove every app on this Hevy account.");
+      }
+      // The grant first: its refresh token lives inside it, and the provider
+      // lists and deletes its access tokens (best effort). Then this call's
+      // own token record by key, which is what makes THIS bearer stop working
+      // at the origin at once. A failure between the two leaves the
+      // security-relevant half done, since /mcp refuses tokens whose grant is
+      // gone. The edge cache can still honour the old token for up to a minute.
+      await ctx.env.OAUTH_PROVIDER.revokeGrant(ctx.grant.id, userId);
+      await ctx.env.OAUTH_KV.delete(ctx.grant.tokenKey);
+      log("user.disconnected", { userId, scope: "app", client: ctx.props.client });
+      return `Disconnected this app. Other apps connected to the same Hevy account keep working; ask to "disconnect from Hevy everywhere" to remove them all. Reconnect anytime: ${ctx.origin}/start`;
+    },
+  );
+
+  reg(
+    server,
+    ctx,
+    "list_connections",
+    "List every app connected to this Hevy account on this server: the app, read or read + write, when it connected, and its connection id (for disconnect). Reconnecting an app adds a connection and leaves the older one until it expires (a year) or is disconnected. A connection made in the last minute may not show yet.",
+    {},
+    async () => {
+      const connections: { connection_id: string; app: string; access: string; connected_at: string | null; this_app: boolean }[] = [];
+      let cursor: string | undefined;
+      do {
+        const page = await ctx.env.OAUTH_PROVIDER.listUserGrants(ctx.props.hevyUserId, { cursor });
+        for (const g of page.items) {
+          const meta = (g.metadata ?? {}) as { client?: string; canWrite?: boolean; connectedAt?: string | number };
+          const at = typeof meta.connectedAt === "number" ? new Date(meta.connectedAt * 1000).toISOString() : meta.connectedAt;
+          connections.push({
+            connection_id: g.id,
+            app: meta.client ?? g.clientId,
+            access: meta.canWrite ? "read + write" : "read only",
+            connected_at: at ?? (g.createdAt ? new Date(g.createdAt * 1000).toISOString() : null),
+            this_app: g.id === ctx.grant?.id,
+          });
+        }
+        cursor = page.cursor;
+      } while (cursor);
+      connections.sort((a, b) => (b.connected_at ?? "").localeCompare(a.connected_at ?? ""));
+      return { connections, note: "To remove one: disconnect with its connection_id. To remove all and forget the stored key: disconnect with everywhere=true." };
     },
   );
 
