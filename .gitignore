@@ -12,3 +12,6 @@ dist/
 # Logs / OS
 *.log
 .DS_Store
+
+# KV snapshots taken at cutover (hold encrypted grants; never commit)
+backups/
