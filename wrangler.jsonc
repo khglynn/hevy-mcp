@@ -3,9 +3,9 @@
  * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
  *
  * Secrets (NOT here — set via `wrangler secret put` / `.dev.vars`):
- *   MCP_INVITE_CODE — required. Generated (`openssl rand -hex 16`), carried in
- *                     the /start?invite= link you send people. The server
- *                     refuses every new connection when it is unset (fail closed).
+ *   MCP_INVITE_CODE — optional. When set, connecting requires the invite carried
+ *                     in the /start?invite= link; when unset (Kevin's deployment)
+ *                     anyone with the address can connect their own Hevy account.
  *   OWNER_TOKEN     — optional. Unlocks /admin (who is connected, revoke,
  *                     remove). /admin is a 404 when unset. Make it long.
  *   OPERATOR_NAME   — optional. Your name, shown on the connect and privacy

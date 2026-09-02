@@ -93,7 +93,7 @@ async function fail(e: unknown, ctx: ToolContext, isWrite: boolean) {
       }
       if (!confirmedDead) {
         log("hevy.unauthorized_unconfirmed", { userId: ctx.props.hevyUserId });
-        return errorResult("Hevy answered 401 to that request but your key still checks out, so nothing was changed. Try again in a moment; if it keeps happening, the specific id you asked for may be wrong.");
+        return errorResult("Hevy rejected that request, but your key still works, so nothing changed. Try again. If it keeps failing, check that you asked for the right workout, routine, or exercise.");
       }
       let revoked = 0;
       try {
@@ -104,26 +104,25 @@ async function fail(e: unknown, ctx: ToolContext, isWrite: boolean) {
         log("hevy.revoke_failed", { userId: ctx.props.hevyUserId, error: String(revokeErr) });
       }
       log("hevy.key_rejected", { userId: ctx.props.hevyUserId, client: ctx.props.client, revoked });
+      const inviteNote = ctx.env.MCP_INVITE_CODE ? ` Because it is a new key, the page will ask for the invite: open your original invite link, or ask ${operator} for it.` : "";
       return errorResult(
-        `Your Hevy key isn't working anymore — Hevy rejected it. That usually means it was revoked or replaced on Hevy's Developer page. ` +
-          `This connection has been disconnected. To reconnect: remove the Hevy connector, add it again, and paste your current key. Because it is a new key, the page will ask for the invite — open the invite link you were originally sent (or ask ${operatorName(ctx.env)} for it), then start here: ${ctx.origin}/start`,
+        `Your Hevy key no longer works. It may have been revoked or replaced on Hevy's Developer page. This server disconnected every app that used that key. ` +
+          `To reconnect, remove and re-add the Hevy connection in your app and paste the current key.${inviteNote} Start here: ${ctx.origin}/start`,
       );
     }
     if (e.status === 403) {
       log("hevy.forbidden", { userId: ctx.props.hevyUserId });
-      return errorResult(
-        "Hevy says this key isn't active. That usually means the Hevy Pro subscription behind it has lapsed — the API is a Pro feature. Renew Pro and the same key should start working again.",
-      );
+      return errorResult("Hevy says your key is inactive. Your Hevy Pro subscription may have expired. Renew Pro, then try again with the same key.");
     }
     if (e.status === 429) {
       log("hevy.rate_limited", { userId: ctx.props.hevyUserId });
-      return errorResult("Hevy is rate-limiting requests right now. Nothing is wrong with your key — wait a minute and try again.");
+      return errorResult("Hevy is receiving too many requests. Your key is fine. Wait a minute, then try again.");
     }
     if (e.status >= 500 || e.status === 0) {
       log("hevy.upstream_failure", { userId: ctx.props.hevyUserId, status: e.status, write: isWrite });
       return errorResult(
         isWrite
-          ? "Hevy didn't confirm whether that change saved. Check the Hevy app before retrying so you don't create a duplicate."
+          ? "Hevy did not confirm whether it saved your change. Check the Hevy app before trying again so you do not make the change twice."
           : "Hevy didn't answer this time. Try again in a minute.",
       );
     }
@@ -135,19 +134,19 @@ async function fail(e: unknown, ctx: ToolContext, isWrite: boolean) {
     } catch {
       reason = e.body.length < 160 ? e.body : "";
     }
-    return errorResult(`Hevy rejected that request (${e.status})${reason ? `: ${reason}` : ""}. Check the values and try again.`);
+    return errorResult(`Hevy couldn't complete that request${reason ? `: ${reason}` : ""}. Check the details and try again.`);
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (/abort|timeout|network|fetch failed/i.test(msg)) {
     log("hevy.network_failure", { userId: ctx.props.hevyUserId, write: isWrite });
     return errorResult(
       isWrite
-        ? "Hevy didn't confirm whether that change saved. Check the Hevy app before retrying so you don't create a duplicate."
+        ? "Hevy did not confirm whether it saved your change. Check the Hevy app before trying again so you do not make the change twice."
         : "Hevy didn't answer this time. Try again in a minute.",
     );
   }
   log("tool.unexpected_error", { userId: ctx.props.hevyUserId, error: msg });
-  return errorResult(`The connector hit an unexpected problem. Try once more; if it repeats, tell ${operator}.`);
+  return errorResult(`Something went wrong while using Hevy. Try once more. If it happens again, tell ${operator}.`);
 }
 
 /** "get_workout_count" -> "Get workout count" for a readable display title. */
@@ -271,15 +270,15 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "whoami",
-    "Which Hevy account this connection uses, and whether Claude may add or edit anything. Use this first when something looks wrong.",
+    "Show which Hevy account is connected, which app is using it, and whether the app has Read only or Read + write access. Use this first when something looks wrong.",
     {},
     async () => ({
       hevy_account: ctx.props.name,
       connected_via: ctx.props.client,
       can_write: ctx.props.canWrite,
       note: ctx.props.canWrite
-        ? "Claude may log workouts and create routines, folders, custom exercises and body measurements. Hevy has no delete API, so update_workout overwrites without undo."
-        : `Read-only. To let Claude add and edit, remove the connector and connect again with the "let Claude add and edit" box ticked: ${ctx.origin}/start`,
+        ? `${ctx.props.client} can log workouts and create routines, folders, custom exercises, and body measurements. Hevy has no undo. Editing a workout replaces the saved version.`
+        : `Read only. To let ${ctx.props.client} add or edit, remove the Hevy connection, add it again, and choose "Read + write": ${ctx.origin}/start`,
     }),
   );
 
@@ -287,7 +286,7 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "disconnect",
-    "Disconnect this Hevy account from the server: revokes every grant for this person and forgets the key they connected with, so no client can use the stored key. Ask before calling this.",
+    "Disconnect this Hevy account from every app using this server and delete the stored key. Ask the person before doing this.",
     {},
     async () => {
       const revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
@@ -297,7 +296,8 @@ export function buildServer(ctx: ToolContext): McpServer {
         ctx.env.OAUTH_KV.delete(`tplcache:${ctx.props.hevyUserId}`),
       ]);
       log("user.disconnected", { userId: ctx.props.hevyUserId, revoked });
-      return `Disconnected. ${revoked} connection(s) revoked and the stored key is gone with them; this server has also forgotten the key you connected with, so reconnecting needs an invite link again. To cut Hevy access at the source too, revoke the key on Hevy's Developer page (hevy.com/settings?developer). Reconnect any time: ${ctx.origin}/start`;
+      const inviteNote = ctx.env.MCP_INVITE_CODE ? " You will need an invite link to reconnect." : "";
+      return `Disconnected. Removed ${revoked} app connection(s). This server deleted the stored key and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
     },
   );
 

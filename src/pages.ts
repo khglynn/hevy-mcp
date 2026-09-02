@@ -5,16 +5,17 @@
  * OAuth endpoints (/token, /register); this app only renders the login step
  * and completes the grant.
  *
- * Order of checks on /approve is deliberate: throttle → known client → invite
- * configured → key shape → invite (or a key this server has seen before) →
- * Hevy → membership. Hevy is only asked about a key when the caller holds the
- * invite or presents a key that connected before, and failures are counted,
- * so the page cannot be used as a free "is this Hevy key valid?" oracle.
+ * Order of checks on /approve: throttle → known client → key shape → invite
+ * (only when the deployment sets MCP_INVITE_CODE) → Hevy → membership. With an
+ * invite configured, Hevy is only asked about a key when the caller holds the
+ * invite or presents a key that connected before; without one, the per-IP
+ * throttles are the brake. Kevin's own deployment runs open: the key is the
+ * credential, and a stranger connecting only reaches their own Hevy account.
  *
  * Look: "iron and chalk". Near-black ground, gunmetal surfaces, chalk-white
  * type, one safety-orange accent; Barlow Condensed for display (gym signage),
  * Barlow for body. The signature on /start is the barbell rail: three numbered
- * plates for the three real steps.
+ * plates for the three real steps. Copy was reviewed by Codex on 2026-09-01.
  */
 
 import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
@@ -94,8 +95,12 @@ const layout = (body: unknown, title: string, page: string) => html`<!doctype ht
         a:hover { color: var(--tape); }
         b { font-weight: 600; }
 
+        .pre { display: flex; gap: 12px; align-items: baseline; margin: 30px 0 0; padding: 14px 16px; border: 1px solid var(--edge); border-radius: 6px; background: var(--plate); }
+        .pre .k { font-family: "Barlow Condensed", sans-serif; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--tape); font-size: 15px; white-space: nowrap; }
+        .pre p { margin: 0; }
+
         /* the barbell rail: three plates for three real steps */
-        .rail { list-style: none; margin: 40px 0 0; padding: 0; position: relative; }
+        .rail { list-style: none; margin: 34px 0 0; padding: 0; position: relative; }
         .rail::before { content: ""; position: absolute; left: 25px; top: 24px; bottom: 24px; width: 4px; background: var(--edge); border-radius: 2px; }
         .step { position: relative; display: grid; grid-template-columns: 54px 1fr; gap: 18px; padding: 0 0 34px; }
         .step:last-child { padding-bottom: 0; }
@@ -162,45 +167,45 @@ app.get("/favicon.ico", (c) =>
 // ---------- /start — the link the operator sends ----------
 function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string, nonce: string) {
   return layout(
-    html`<div class="eyebrow">Hevy → Claude · invite only</div>
-      <h1>Your lifting log,<br />in Claude's hands.</h1>
-      <p class="lede">Ask what you benched last week. Have it build the next block. Log a session without typing it twice.</p>
-      ${inviteState === "ok" ? html`<div class="banner ok">Invite saved in this browser. You're good to connect.</div>` : ""}
-      ${inviteState === "bad" ? html`<div class="banner err">That invite link isn't right. Open the link exactly as it was sent to you.</div>` : ""}
-      <div id="mobile" class="banner note">You'll need a computer for this: Hevy's key page and Claude's connector settings are both desktop-only. Send yourself this link.</div>
+    html`<div class="eyebrow">Hevy → Claude</div>
+      <h1>Connect Hevy<br />to Claude.</h1>
+      <p class="lede">Use your own Hevy account to check workout history, build routines, or log a session through Claude.</p>
+      ${inviteState === "ok" ? html`<div class="banner ok">Invite saved. Follow the steps below.</div>` : ""}
+      ${inviteState === "bad" ? html`<div class="banner err">This invite link isn't right. Open the original link exactly as it was sent to you.</div>` : ""}
+      <div id="mobile" class="banner note">Open this link on a computer. You can't finish setup on a phone.</div>
+
+      <div class="pre"><span class="k">Before you start</span><p>You need Hevy Pro to get a key.</p></div>
 
       <ol class="rail">
         <li class="step">
           <span class="plate">1</span>
           <div class="body">
-            <h2>Hevy Pro</h2>
-            <p>The API is a Pro feature. Free Hevy accounts can't switch it on.</p>
+            <h2>Copy your Hevy key</h2>
+            <p>On Hevy's website, go to Settings → <b>Developer</b>. Copy the key next to Revoke. It stays there until you revoke it.</p>
+            <a class="btn ghost" href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Open Hevy's Developer page ↗</a>
           </div>
         </li>
         <li class="step">
           <span class="plate">2</span>
           <div class="body">
-            <h2>Copy your API key</h2>
-            <p>Hevy → Settings → <b>Developer</b>. The key sits on that page whenever you need it, next to a button that revokes it.</p>
-            <a class="btn ghost" href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Open Hevy's Developer page ↗</a>
+            <h2>Add it to Claude</h2>
+            <p>In Claude, go to <b>Customize → Connectors → + → Add custom connector</b>. Paste the address below. Claude fills in the sign-in settings; keep the defaults and continue.</p>
+            <div class="url"><code id="mcpurl">${origin}/mcp</code><button class="copy" id="copy" type="button">Copy</button></div>
+            <p class="fine">Personal Claude plans work, including Free, which allows one custom connector. On Team or Enterprise, an Owner must add it first under Organization settings → Connectors. Set it up on the web or desktop app; then you can use it on your phone.</p>
           </div>
         </li>
         <li class="step">
           <span class="plate">3</span>
           <div class="body">
-            <h2>Add the connector in Claude</h2>
-            <p><b>Customize → Connectors → + → Add custom connector.</b> Paste this address. Claude detects the sign-in settings by itself; keep the defaults and continue.</p>
-            <div class="url"><code id="mcpurl">${origin}/mcp</code><button class="copy" id="copy" type="button">Copy</button></div>
-            <p class="fine">Any personal plan, including Free (one custom connector). On a Team or Enterprise account an Owner adds it under Organization settings → Connectors first. Add it on the web or desktop app; your phone picks it up after.</p>
+            <h2>Connect your account</h2>
+            <p>Claude opens this server's connection page. Paste your key, choose Read only or Read + write, then select Connect.</p>
           </div>
         </li>
       </ol>
 
-      <p style="margin-top:34px">Claude then opens a page from this server. Paste your key, pick read-only or read + write, and you're connected.</p>
-
       <section class="strip">
-        <p>Runs on ${operator}'s own Cloudflare. Your key is stored encrypted and used only to reach Hevy for you; ${operator} could technically read it. Leave any time — tell Claude "disconnect from Hevy", or revoke the key on Hevy's Developer page. <a href="/privacy">What's kept, and for how long →</a></p>
-        <p>Using ChatGPT, Claude Code or Cursor? Same address, added the way that app adds MCP servers.</p>
+        <p>This server runs on ${operator}'s Cloudflare account. It stores your key in encrypted form and uses it only to reach Hevy for you. ${operator} could technically read the key. To leave, tell Claude "disconnect from Hevy" or revoke the key on Hevy's Developer page. <a href="/privacy">See what's stored and for how long →</a></p>
+        <p>Using ChatGPT, Claude Code, or Cursor? Add the same address in that app.</p>
       </section>
       <script nonce="${nonce}">
         (function () {
@@ -211,7 +216,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
           if (/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent)) { var m = document.getElementById("mobile"); if (m) m.style.display = "block"; }
         })();
       </script>`,
-    "Hevy → Claude",
+    "Connect Hevy to Claude",
     "start",
   );
 }
@@ -223,8 +228,8 @@ function handleStart(c: Context<{ Bindings: AppEnv; Variables: Vars }>) {
   const origin = new URL(c.req.url).origin;
   const invite = c.req.query("invite");
   let state: "ok" | "bad" | "none" = "none";
-  if (invite) {
-    if (c.env.MCP_INVITE_CODE && constantTimeEqual(invite, c.env.MCP_INVITE_CODE)) {
+  if (invite && c.env.MCP_INVITE_CODE) {
+    if (constantTimeEqual(invite, c.env.MCP_INVITE_CODE)) {
       state = "ok";
       c.header("Set-Cookie", cookie(INVITE_COOKIE, invite, 365 * DAY));
     } else {
@@ -241,20 +246,20 @@ app.get("/privacy", (c) => {
   return c.html(
     layout(
       html`<div class="eyebrow">Hevy → Claude · what's kept</div>
-        <h1>What this server stores.</h1>
-        <p><b>Your Hevy API key.</b> Encrypted inside the OAuth grant your client holds, in Cloudflare KV. The encryption key is derived from your client's token, so the stored copy is unreadable without it. The key is decrypted only for the moment a request from your client is served; it is never written anywhere else and never logged (logs redact anything shaped like a key).</p>
-        <p><b>Your Hevy display name, a hash of your Hevy user id, and a hash of your key</b>, so the operator can see who is connected and so you can reconnect later without a fresh invite, plus the date you connected and which app connected (Claude, ChatGPT, Claude Code, Cursor).</p>
-        <p><b>Nothing from your workouts.</b> Requests go straight to Hevy and back; no workout, routine or measurement data is kept here. A copy of your exercise list — Hevy's built-ins plus any custom exercises you've made — is cached unencrypted for six hours per person to spare Hevy repeated lookups.</p>
+        <h1>What this server keeps.</h1>
+        <p><b>Your Hevy API key.</b> This server stores an encrypted copy in Cloudflare. Your connected app holds what is needed to unlock it, so the stored copy cannot be read on its own. The server unlocks the key only while sending your request to Hevy. It never stores an unencrypted copy or writes the key to logs.</p>
+        <p><b>Your Hevy display name and connection details.</b> In addition to the encrypted key above, this server stores one-way fingerprints of your Hevy account and key, the dates you connected, and the app you used: Claude, ChatGPT, Claude Code, or Cursor. This lets ${operator} see who is connected and lets you reconnect later.</p>
+        <p><b>Your workouts stay in Hevy.</b> This server does not store workout, routine, or measurement data. It does keep an unencrypted copy of your exercise list (Hevy's built-in exercises and any custom ones) for six hours, so it does not have to ask Hevy for the same list repeatedly.</p>
         <h2 style="margin-top:28px">How long</h2>
-        <p>Access tokens last 7 days and are refreshed silently by your client. The connection itself lasts a year from the day you connect, however often you use it; after that your assistant asks you to paste your Hevy key again, and the stored key is gone with the expired connection. The record that your account has connected before (name, hashed id, a hash of the key you used, dates) is kept for a year so you can reconnect without a fresh invite, or until you disconnect.</p>
+        <p>Your connection lasts for one year from the day you connect, no matter how often you use it. Your app renews its short-term access every seven days in the background, but that does not extend the one-year limit. After one year, the connection and encrypted key are deleted, and your assistant asks you to paste the key again. Your Hevy key will still be on Hevy's Developer page unless you revoked it. Your display name, account and key fingerprints, and connection dates are also kept for up to one year. Disconnecting deletes them sooner.</p>
         <h2 style="margin-top:28px">Who can read it</h2>
-        <p>${operator} operates this server on a personal Cloudflare account and could technically read a key while a request is in flight. Nobody else can. There is no support promise; the Hevy API itself is unofficial and Hevy says it may change or withdraw it.</p>
+        <p>${operator} runs this server on a personal Cloudflare account and could technically read your key while the server is using it. Nobody else can read the stored copy. This is a personal project with no support promise. Hevy's developer access is unofficial, and Hevy says it may change or remove it.</p>
         <h2 style="margin-top:28px">Leaving</h2>
-        <p><b>Tell your assistant "disconnect from Hevy".</b> That revokes every connection, deletes the stored key, and forgets the key you connected with.</p>
-        <p><b>Or revoke the key on <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Hevy's Developer page</a>.</b> The stored copy is useless from that moment, to this server and to anything else holding it; it is cleared the next time anything tries to use it.</p>
-        <p>Removing the connector in Claude alone does not delete the stored key; use one of the two steps above.</p>
+        <p><b>Tell your assistant "disconnect from Hevy".</b> This disconnects every app using this server, deletes the stored key, and forgets the key you used.</p>
+        <p><b>Or revoke the key on <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Hevy's Developer page</a>.</b> It stops working immediately everywhere it was used, including this server. This server deletes its stored copy the next time an app tries to use it.</p>
+        <p>Removing the connection from Claude does not delete the stored key. Use one of the options above.</p>
         <p class="fine" style="margin-top:28px"><a href="/start">← Back to the start page</a></p>`,
-      "Hevy → Claude · what's kept",
+      "What this server keeps",
       "privacy",
     ),
   );
@@ -276,8 +281,8 @@ function connectPage(o: ConnectPageOpts) {
   const who = describeClient(o.client);
   return layout(
     html`<div class="eyebrow">Hevy → ${o.client}</div>
-      <h1>${o.client} wants<br />your Hevy log.</h1>
-      <p class="lede"><b>${who}</b> is asking to use your Hevy account. Your key, your data — nobody else's is involved.</p>
+      <h1>Connect Hevy<br />to ${o.client}.</h1>
+      <p class="lede">You're connecting <b>${who}</b> to your own Hevy account. No one else's account is involved.</p>
       ${o.error ? html`<div class="banner err">${o.error}</div>` : ""}
       <form action="/approve" method="POST" id="f">
         <input type="hidden" name="oauthReqInfo" value="${JSON.stringify(o.req)}" />
@@ -287,21 +292,21 @@ function connectPage(o: ConnectPageOpts) {
                  autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required />
           <button type="button" id="toggle" class="toggle" aria-label="Hide key">Hide</button>
         </div>
-        <p class="fine" style="margin-top:8px">Copy it from Hevy → Settings → Developer (needs Hevy Pro). <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Open Hevy's Developer page ↗</a></p>
+        <p class="fine" style="margin-top:8px">On Hevy's website, go to Settings → Developer and copy your key. Hevy Pro is required. <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Open Hevy's Developer page ↗</a></p>
         ${o.showInvite
           ? html`<label for="invite">Invite code</label>
               <input type="text" id="invite" name="invite" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
-              <p class="fine" style="margin-top:8px">From the invite link you were sent; opening that link in this browser fills it in for you. Connected before with this same key? Leave it blank.</p>`
+              <p class="fine" style="margin-top:8px">Paste the invite code, or open the invite link in this browser and return here. If you connected before with this same key, leave it blank.</p>`
           : ""}
         <fieldset>
-          <legend>Access</legend>
-          <label class="opt"><input type="radio" name="can_write" value="" ${o.canWrite ? "" : "checked"} /><span>Read only<small>${o.client} can look at your workouts, routines and measurements. Not touch.</small></span></label>
-          <label class="opt"><input type="radio" name="can_write" value="on" ${o.canWrite ? "checked" : ""} /><span>Read + write<small>${o.client} can also log workouts and build routines. Hevy has no undo: an edit to a saved workout replaces what was there.</small></span></label>
+          <legend>Choose access</legend>
+          <label class="opt"><input type="radio" name="can_write" value="" ${o.canWrite ? "" : "checked"} /><span>Read only<small>${o.client} can view your workouts, routines, and measurements but can't change them.</small></span></label>
+          <label class="opt"><input type="radio" name="can_write" value="on" ${o.canWrite ? "checked" : ""} /><span>Read + write<small>${o.client} can also log workouts and build routines. Hevy has no undo. Editing a saved workout replaces what was there.</small></span></label>
         </fieldset>
         <button type="submit" class="btn wide" id="submit">Connect</button>
       </form>
       <section class="strip">
-        <p>Stored encrypted on a server run by ${o.operator}, used only to reach Hevy for you; ${o.operator} could technically read it. Leave any time — tell ${who} "disconnect from Hevy", or revoke the key on Hevy's Developer page. <a href="/privacy">Details →</a></p>
+        <p>This server stores your key in encrypted form and uses it only to reach Hevy for you. ${o.operator} runs the server and could technically read the key. To leave, tell ${who} "disconnect from Hevy" or revoke the key on Hevy's Developer page. <a href="/privacy">See what's stored and for how long →</a></p>
       </section>
       <script nonce="${o.nonce}">
         (function () {
@@ -320,18 +325,18 @@ function connectPage(o: ConnectPageOpts) {
 const expiredPage = () =>
   layout(
     html`<div class="eyebrow">Hevy → Claude</div>
-      <h1>This page expired.</h1>
-      <p>Go back to your assistant and start Connect again. If it keeps happening, open <a href="/start">the start page</a> first.</p>`,
-    "Hevy → Claude",
+      <h1>Connection page expired.</h1>
+      <p>Return to your assistant and choose Connect again. If this keeps happening, open <a href="/start">the start page</a> and follow the steps again.</p>`,
+    "Connection page expired",
     "expired",
   );
 
 const refusalPage = (operator: string) =>
   layout(
     html`<div class="eyebrow">Hevy → ?</div>
-      <h1>Don't know that app.</h1>
-      <p>The app asking for access isn't one this server recognises, so it won't show the key form. It works with Claude, ChatGPT, Claude Code and Cursor. If you're using one of those and see this, tell ${operator}.</p>`,
-    "Hevy → Claude",
+      <h1>We didn't recognise<br />this app.</h1>
+      <p>This server connects only to Claude, ChatGPT, Claude Code, and Cursor, so it did not show the key form. If you are using one of those apps, tell ${operator}.</p>`,
+    "App not recognised",
     "refused",
   );
 
@@ -350,20 +355,20 @@ app.get("/authorize", async (c) => {
     return c.html(refusalPage(operatorName(c.env)), 403);
   }
   const inviteCookie = getCookie(c.req.raw, INVITE_COOKIE);
-  const haveInvite = !!(c.env.MCP_INVITE_CODE && inviteCookie && constantTimeEqual(inviteCookie, c.env.MCP_INVITE_CODE));
-  return c.html(connectPage({ origin, client, req, showInvite: !haveInvite, operator: operatorName(c.env), nonce: c.get("nonce") }));
+  const inviteRequired = !!c.env.MCP_INVITE_CODE;
+  const haveInvite = !!(inviteRequired && inviteCookie && constantTimeEqual(inviteCookie, c.env.MCP_INVITE_CODE as string));
+  return c.html(connectPage({ origin, client, req, showInvite: inviteRequired && !haveInvite, operator: operatorName(c.env), nonce: c.get("nonce") }));
 });
 
 // ---------- /approve — validate, then complete the grant ----------
 function describeHevyFailure(e: unknown): string {
   if (e instanceof HevyError) {
     if (e.status === 401)
-      return "Hevy didn't recognise that key. Check you copied the whole thing with no spaces on the ends, or open Hevy's Developer page and copy it again.";
-    if (e.status === 403)
-      return "Hevy says this key isn't active. That usually means the Hevy Pro subscription behind it has lapsed. Renew Pro and try again — the same key should start working.";
-    if (e.status === 429) return "Hevy is asking us to slow down. Nothing's wrong with your key — wait a minute and hit Connect again.";
+      return "Hevy didn't recognise that key. Copy it again from Hevy → Settings → Developer, and make sure there are no spaces before or after it.";
+    if (e.status === 403) return "Hevy says this key is inactive. Your Hevy Pro subscription may have expired. Renew Pro, then try the same key again.";
+    if (e.status === 429) return "Hevy is receiving too many requests. Your key is fine. Wait a minute, then select Connect again.";
   }
-  return "Couldn't reach Hevy just now. That's on Hevy's side, not your key — nothing to change. Try again in a minute.";
+  return "We couldn't reach Hevy. Your key may still be fine. Wait a minute, then try again.";
 }
 
 async function bumpFails(env: AppEnv, key: string): Promise<void> {
@@ -377,8 +382,8 @@ function successPage(name: string, redirectTo: string, canWrite: boolean, client
       <div class="eyebrow">Hevy → ${client}</div>
       <div class="stamp">Connected</div>
       <h2>Connected as ${name || "your Hevy account"}</h2>
-      <p>${canWrite ? `${client} can read your workouts and add or edit them.` : `${client} can read your workouts. Reconnect with "Read + write" if you want it to add or edit later.`}</p>
-      <p class="fine">Sending you back… <a href="${redirectTo}">continue</a> if nothing happens. Not you? <a href="/start">Start over</a>.</p>`,
+      <p>${canWrite ? `You can now ask ${client} to read your workouts and add or edit them.` : `${client} can now read your workouts. To let it add or edit them, reconnect and choose Read + write.`}</p>
+      <p class="fine">Returning to ${client}… If nothing happens, <a href="${redirectTo}">continue</a>. Wrong Hevy account? <a href="/start">Start over</a>.</p>`,
     "Connected",
     "connected",
   );
@@ -402,8 +407,8 @@ app.post("/approve", async (c) => {
       layout(
         html`<div class="eyebrow">Hevy → Claude</div>
           <h1>Too many tries.</h1>
-          <p>Give it a minute, then try again. If you've pasted the key a few times and it keeps failing, tell ${operatorName(c.env)} — something's wrong on our end.</p>`,
-        "Hevy → Claude",
+          <p>Wait one minute, then try again. If it still fails, tell ${operatorName(c.env)}.</p>`,
+        "Too many tries",
         "throttled",
       ),
       429,
@@ -430,35 +435,25 @@ app.post("/approve", async (c) => {
     return c.html(refusalPage(operatorName(c.env)), 403);
   }
 
-  // Fail CLOSED: with no invite configured, nobody connects.
-  if (!c.env.MCP_INVITE_CODE) {
-    log("approve.no_invite_configured", {});
-    return c.html(
-      layout(
-        html`<div class="eyebrow">Hevy → Claude</div><h1>Not taking connections right now.</h1><p>The server isn't fully configured. Tell ${operatorName(c.env)}.</p>`,
-        "Hevy → Claude",
-        "unconfigured",
-      ),
-      503,
-    );
-  }
-
   const canWrite = body.can_write === "on";
   const key = String(body.hevy_key ?? "").trim();
-  // The cookie is a hint that can only help: a stale one (rotated invite) is
-  // treated as absent, never as a wrong answer. Only a typed code can be "wrong".
+  // Invite gate, only when this deployment configured one. The cookie is a hint
+  // that can only help: a stale one (rotated invite) is treated as absent, never
+  // as a wrong answer. Only a typed code can be "wrong".
+  const inviteRequired = !!c.env.MCP_INVITE_CODE;
+  const inviteCode = c.env.MCP_INVITE_CODE ?? "";
   const typedInvite = String(body.invite ?? "").trim();
   const cookieInvite = getCookie(c.req.raw, INVITE_COOKIE) || "";
-  const typedOk = typedInvite.length > 0 && constantTimeEqual(typedInvite, c.env.MCP_INVITE_CODE);
-  const inviteOk = typedOk || (cookieInvite.length > 0 && constantTimeEqual(cookieInvite, c.env.MCP_INVITE_CODE));
+  const typedOk = inviteRequired && typedInvite.length > 0 && constantTimeEqual(typedInvite, inviteCode);
+  const inviteOk = !inviteRequired || typedOk || (cookieInvite.length > 0 && constantTimeEqual(cookieInvite, inviteCode));
   if (typedOk) c.header("Set-Cookie", cookie(INVITE_COOKIE, typedInvite, 365 * DAY));
 
   const again = (error: string, status: 400 | 401 | 403 | 503) =>
-    c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: !inviteOk, operator: operatorName(c.env), nonce: c.get("nonce"), error, canWrite }), status);
+    c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: inviteRequired && !inviteOk, operator: operatorName(c.env), nonce: c.get("nonce"), error, canWrite }), status);
 
   if (!UUID_RE.test(key)) {
     return again(
-      "That doesn't look like a Hevy key. It's a long code with dashes, like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx — copy it from Hevy → Settings → Developer.",
+      "That doesn't look like a Hevy key. Copy the full key from Hevy → Settings → Developer. It should look like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.",
       400,
     );
   }
@@ -466,19 +461,19 @@ app.post("/approve", async (c) => {
   if (!inviteOk && typedInvite.length > 0) {
     await bumpFails(c.env, failKey);
     log("approve.bad_invite", { client });
-    return again("That invite code isn't right. Check the message you were sent, or open the link in it.", 403);
+    return again("That invite code isn't right. Open the original invite link in this browser, then try again.", 403);
   }
 
-  // No invite: only a key this server has seen before gets as far as Hevy.
-  // Decided from a hash of the key, so a stranger cannot use this page to ask
-  // Hevy whether an arbitrary key is valid.
+  // Invite configured but not presented: only a key this server has seen before
+  // gets as far as Hevy. Decided from a hash of the key, so a stranger cannot
+  // use this page to ask Hevy whether an arbitrary key is valid.
   const memberKey = await memberKeyFor(key);
   if (!inviteOk) {
     const seenBefore = await c.env.OAUTH_KV.get(memberKey);
     if (!seenBefore) {
       await bumpFails(c.env, failKey);
       log("approve.invite_missing", { client });
-      return again("This server is invite-only. Open the invite link you were sent first (it remembers the invite in this browser), then come back and connect. If you connected before with a different key, you need the link again.", 403);
+      return again("This server is invite-only. Open the invite link you were sent in this browser, then return here and connect. If you last connected with a different key, you need the invite link again.", 403);
     }
   }
 
@@ -541,7 +536,7 @@ async function ownerOk(c: Context<{ Bindings: AppEnv; Variables: Vars }>): Promi
   return stored === "1";
 }
 
-const adminLoginPage = (nonce: string, error?: string) =>
+const adminLoginPage = (error?: string) =>
   layout(
     html`<div class="eyebrow">Hevy → Claude · owner</div>
       <h1>Owner sign-in.</h1>
@@ -551,11 +546,11 @@ const adminLoginPage = (nonce: string, error?: string) =>
         <input type="password" id="token" name="token" autocomplete="off" required />
         <button type="submit" class="btn wide">Sign in</button>
       </form>`,
-    "Hevy → Claude · owner",
+    "Owner sign-in",
     "admin-login",
   );
 
-app.get("/admin/login", (c) => (c.env.OWNER_TOKEN ? c.html(adminLoginPage(c.get("nonce"))) : c.notFound()));
+app.get("/admin/login", (c) => (c.env.OWNER_TOKEN ? c.html(adminLoginPage()) : c.notFound()));
 
 app.post("/admin/login", async (c) => {
   if (!c.env.OWNER_TOKEN) return c.notFound();
@@ -563,18 +558,18 @@ app.post("/admin/login", async (c) => {
   const rl = await rateLimit(c.env.ADMIN_RL, ip);
   if (!rl.success) {
     log("admin.throttled", {});
-    return c.html(adminLoginPage(c.get("nonce"), "Too many attempts. Wait a minute."), 429);
+    return c.html(adminLoginPage("Too many attempts. Wait a minute."), 429);
   }
   let body: Record<string, unknown>;
   try {
     body = await c.req.parseBody();
   } catch {
-    return c.html(adminLoginPage(c.get("nonce"), "That didn't come through. Try again."), 400);
+    return c.html(adminLoginPage("We couldn't read that sign-in. Try again."), 400);
   }
   const token = String(body.token ?? "");
   if (!token || !constantTimeEqual(token, c.env.OWNER_TOKEN)) {
     log("admin.denied", {});
-    return c.html(adminLoginPage(c.get("nonce"), "That token isn't right."), 401);
+    return c.html(adminLoginPage("That token isn't right."), 401);
   }
   const sid = randomToken();
   await c.env.OAUTH_KV.put(`adminsession:${await sha256Hex(sid)}`, "1", { expirationTtl: DAY });
@@ -611,20 +606,21 @@ app.get("/admin", async (c) => {
 
   const grants = await listPrefix<GrantRecord>(c.env.OAUTH_KV, "grant:");
   grants.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  const inviteOn = !!c.env.MCP_INVITE_CODE;
   const rows = grants.map(
     (g) => html`<tr>
       <td>${g.metadata?.name ?? "—"}<br /><span class="small">${g.userId}</span></td>
       <td>${g.metadata?.client ?? "—"}<br /><span class="small">${g.clientId.length > 28 ? g.clientId.slice(0, 28) + "…" : g.clientId}</span></td>
-      <td>${g.metadata?.canWrite ? "read + write" : "read"}</td>
+      <td>${g.metadata?.canWrite ? "read + write" : "read only"}</td>
       <td>${g.createdAt ? new Date(g.createdAt * 1000).toISOString().slice(0, 10) : "—"}</td>
       <td style="white-space:nowrap">
         <form method="POST" action="/admin/revoke" style="margin:0;display:inline">
           <input type="hidden" name="userId" value="${g.userId}" /><input type="hidden" name="grantId" value="${g.id}" />
-          <button class="copy" type="submit" style="padding:6px 10px">Revoke</button>
+          <button class="copy" type="submit" style="padding:6px 10px">Disconnect app</button>
         </form>
-        <form method="POST" action="/admin/remove" style="margin:0;display:inline">
+        <form method="POST" action="/admin/remove" class="remove" style="margin:0;display:inline" data-name="${g.metadata?.name ?? g.userId}">
           <input type="hidden" name="userId" value="${g.userId}" />
-          <button class="copy" type="submit" style="padding:6px 10px" title="Revoke every grant for this person and forget them">Remove person</button>
+          <button class="copy" type="submit" style="padding:6px 10px" title="Disconnect every app and forget this person">Remove person</button>
         </form>
       </td>
     </tr>`,
@@ -632,15 +628,22 @@ app.get("/admin", async (c) => {
   return c.html(
     layout(
       html`<div class="eyebrow">Hevy → Claude · owner</div>
-        <h1>Connected accounts.</h1>
-        <p class="fine">${grants.length} grant(s). <b>Revoke</b> kills one client's tokens and the encrypted key inside them; the person can reconnect from /start without an invite. <b>Remove person</b> revokes every grant they hold and forgets them, so reconnecting needs the invite link again.</p>
+        <h1>Connected accounts</h1>
+        <p class="fine">Connected apps: ${grants.length}. <b>Disconnect app</b> disconnects that app and deletes the key stored with that connection; the person can reconnect from /start. <b>Remove person</b> disconnects all of their apps and forgets their account${inviteOn ? ", so they will need the invite link to reconnect" : ""}.</p>
         <div style="overflow-x:auto;margin-top:18px">
           <table>
-            <thead><tr><th>Who</th><th>Client</th><th>Access</th><th>Since</th><th></th></tr></thead>
+            <thead><tr><th>Who</th><th>App</th><th>Access</th><th>Since</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
-        </div>`,
-      "Hevy → Claude · owner",
+        </div>
+        <script nonce="${c.get("nonce")}">
+          document.querySelectorAll("form.remove").forEach(function (f) {
+            f.addEventListener("submit", function (e) {
+              if (!confirm("Disconnect every app for " + (f.getAttribute("data-name") || "this person") + " and forget them?")) e.preventDefault();
+            });
+          });
+        </script>`,
+      "Connected accounts",
       "admin",
     ),
   );

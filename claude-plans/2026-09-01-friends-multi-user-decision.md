@@ -1,6 +1,6 @@
 # hevy-mcp for friends — decision brief
 
-**Created:** 2026-09-01 · **Status:** SHIPPED 2026-09-01 — all six calls approved as recommended (plus call 7, extract the auth layer into a public template, still to do); live on `hevy.kevinhg.com`, workers.dev hostname kept; old grants purged; repo public. Two corrections during build: the refresh window is a hard year (the library does not slide it), and the invite gate is decided from a hash of the key before Hevy is asked. · **Size:** L
+**Created:** 2026-09-01 · **Status:** SHIPPED 2026-09-01 · **Call 4 reversed the same night:** Kevin's first live test hit the invite field (the OAuth pop-up opened in a browser profile without the cookie) and he asked why it existed; the deployment now runs open, and the gate stays in the code as an opt-in for other deployers. — all six calls approved as recommended (plus call 7, extract the auth layer into a public template, still to do); live on `hevy.kevinhg.com`, workers.dev hostname kept; old grants purged; repo public. Two corrections during build: the refresh window is a hard year (the library does not slide it), and the invite gate is decided from a hash of the key before Hevy is asked. · **Size:** L
 
 ## 1. Where we are
 

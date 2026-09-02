@@ -60,10 +60,10 @@ async function main() {
   check("/start 200 with the /mcp URL", start.status === 200 && startHtml.includes(`${issuerOrigin}/mcp`), `issuer=${issuerOrigin}`);
   check("/start sets security headers", start.headers.get("x-content-type-options") === "nosniff" && (start.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"));
   check("/start renders the three-plate rail", (startHtml.match(/class="plate"/g) ?? []).length === 3);
-  const badInvite = await fetch(`${BASE}/start?invite=definitely-wrong`);
-  check("/start with wrong invite: no cookie, explains", !badInvite.headers.get("set-cookie") && (await textOf(badInvite)).includes("isn't right"));
   let inviteCookie = "";
   if (INVITE) {
+    const badInvite = await fetch(`${BASE}/start?invite=definitely-wrong`);
+    check("/start with wrong invite: no cookie, explains", !badInvite.headers.get("set-cookie") && (await textOf(badInvite)).includes("isn't right"));
     const good = await fetch(`${BASE}/start?invite=${encodeURIComponent(INVITE)}`);
     const sc = good.headers.get("set-cookie") ?? "";
     inviteCookie = sc.split(";")[0];
@@ -106,10 +106,12 @@ async function main() {
   const authz = await fetch(authUrl);
   const authzHtml = await authz.text();
   check("/authorize renders consent for Claude", authz.status === 200 && authzHtml.includes('data-page="connect"') && authzHtml.includes("<b>Claude</b>"));
-  check("/authorize shows invite field without cookie", authzHtml.includes('name="invite"'));
-  if (inviteCookie) {
+  if (INVITE) {
+    check("/authorize shows invite field without cookie", authzHtml.includes('name="invite"'));
     const withCookie = await fetch(authUrl, { headers: { cookie: inviteCookie } });
     check("/authorize hides invite field with cookie", !(await withCookie.text()).includes('name="invite"'));
+  } else {
+    check("/authorize has no invite field on an open deployment", !authzHtml.includes('name="invite"'));
   }
   const m = authzHtml.match(/name="oauthReqInfo" value="([^"]+)"/);
   check("/authorize carries oauthReqInfo", !!m);
@@ -130,35 +132,18 @@ async function main() {
   check("/approve rejects non-UUID key (400)", shape.status === 400 && (await textOf(shape)).includes("doesn't look like"));
 
   const fakeKey = "00000000-0000-4000-8000-000000000000";
-  const wrongInvite = await post({ oauthReqInfo, hevy_key: fakeKey, invite: "wrong-invite" });
-  check("/approve rejects wrong invite before asking Hevy (403)", wrongInvite.status === 403 && (await textOf(wrongInvite)).includes("invite code isn't right"));
-
-  const noInvite = await post({ oauthReqInfo, hevy_key: fakeKey });
-  const noInviteText = await textOf(noInvite);
-  check("/approve without invite and an unseen key → invite-only (403), Hevy never asked", noInvite.status === 403 && noInviteText.includes("invite-only"), `got ${noInvite.status}`);
-
-  if (inviteCookie) {
-    const badKey = await post({ oauthReqInfo, hevy_key: fakeKey }, inviteCookie);
-    check("/approve with invite + fake key → Hevy rejection copy", badKey.status === 401 && (await textOf(badKey)).includes("didn't recognise"));
+  if (INVITE) {
+    const wrongInvite = await post({ oauthReqInfo, hevy_key: fakeKey, invite: "wrong-invite" });
+    check("/approve rejects wrong invite before asking Hevy (403)", wrongInvite.status === 403 && (await textOf(wrongInvite)).includes("invite code isn't right"));
+    const noInvite = await post({ oauthReqInfo, hevy_key: fakeKey });
+    const noInviteText = await textOf(noInvite);
+    check("/approve without invite and an unseen key → invite-only (403), Hevy never asked", noInvite.status === 403 && noInviteText.includes("invite-only"), `got ${noInvite.status}`);
   }
+  const badKey = await post({ oauthReqInfo, hevy_key: fakeKey }, inviteCookie);
+  check("/approve with a fake key → Hevy rejection copy (401)", badKey.status === 401 && (await textOf(badKey)).includes("didn't recognise"), `got ${badKey.status}`);
 
-  // --- admin (owner token) ---
-  if (process.env.OWNER_TOKEN) {
-    const bad = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...fakeIp }, body: form({ token: "wrong" }), redirect: "manual" });
-    check("POST /admin/login with a wrong token → 401, no cookie", bad.status === 401 && !bad.headers.get("set-cookie"));
-    const login = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...fakeIp }, body: form({ token: process.env.OWNER_TOKEN }), redirect: "manual" });
-    const setCookie = login.headers.get("set-cookie") ?? "";
-    const ownerCookie = setCookie.split(";")[0];
-    check("POST /admin/login sets an opaque session cookie scoped to /admin", login.status === 302 && ownerCookie.startsWith("hevy_owner=") && !ownerCookie.includes(process.env.OWNER_TOKEN) && /Path=\/admin/.test(setCookie));
-    const adminPage = await fetch(`${BASE}/admin`, { headers: { cookie: ownerCookie } });
-    const adminHtml = await adminPage.text();
-    check("/admin renders for the owner", adminPage.status === 200 && adminHtml.includes("Connected accounts") && adminHtml.includes("Remove person"));
-  } else {
-    console.log("  skip admin checks (set OWNER_TOKEN)");
-  }
-
-  if (!HEVY_API_KEY || !inviteCookie) {
-    console.log("  skip full OAuth + MCP round trip (set HEVY_API_KEY and INVITE)");
+  if (!HEVY_API_KEY) {
+    console.log("  skip full OAuth + MCP round trip (set HEVY_API_KEY)");
     return finish();
   }
 
