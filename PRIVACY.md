@@ -10,7 +10,7 @@
 
 ## How long
 
-One year from the day you connect, however often you use it. Your app refreshes its short-term access every seven days in the background; that doesn't extend the year. After a year the connection and the encrypted key are deleted and your assistant asks for the key again. Disconnecting deletes everything sooner.
+One year from the day you connect, however often you use it. Your app refreshes its short-term access every seven days in the background; that doesn't extend the year. After a year the connection and the encrypted key are deleted and your assistant asks for the key again. Disconnecting an app removes that connection sooner; "disconnect from Hevy everywhere" deletes everything.
 
 ## Who can read it
 

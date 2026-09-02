@@ -17,7 +17,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { FAVICON_DATA_URI, FAVICON_SIZE } from "./favicon";
 import { HevyClient, HevyError, validateHevyKey } from "./hevy";
-import { type AppEnv, log, memberKeyFor, operatorName, revokeAllGrants } from "./util";
+import { type AppEnv, forgetPerson, log, memberKeyFor, operatorName, revokeAllGrants } from "./util";
 
 export const PROPS_VERSION = 3;
 
@@ -294,9 +294,9 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "disconnect",
-    "Disconnect this app from Hevy. Revokes this connection only; other apps using the same key keep working. Pass everywhere=true to disconnect every app that uses this key and delete the stored key. Ask the person before doing this.",
+    "Disconnect this app from Hevy. Revokes this connection only; other apps connected to the same Hevy account keep working. Pass everywhere=true to disconnect every app connected to this Hevy account and delete every stored key for it. Ask the person before doing this.",
     {
-      everywhere: z.boolean().optional().describe("true: disconnect every app using this key and delete the stored key. Default: only this app."),
+      everywhere: z.boolean().optional().describe("true: disconnect every app connected to this Hevy account and delete every stored key for it. Default: only this app."),
     },
     async ({ everywhere }) => {
       if (!everywhere && ctx.grant) {
@@ -311,16 +311,11 @@ export function buildServer(ctx: ToolContext): McpServer {
         return `Disconnected this app. Other apps connected with the same key keep working; ask to "disconnect from Hevy everywhere" to remove them all. Reconnect anytime: ${ctx.origin}/start`;
       }
       // Asked for everywhere, or a bearer this server could not tie to one grant.
-      const revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
-      await Promise.all([
-        ctx.env.OAUTH_KV.delete(`member:${ctx.props.hevyUserId}`),
-        ctx.env.OAUTH_KV.delete(await memberKeyFor(ctx.props.hevyApiKey)),
-        ctx.env.OAUTH_KV.delete(`tplcache:${ctx.props.hevyUserId}`),
-      ]);
-      log("user.disconnected", { userId: ctx.props.hevyUserId, revoked, scope: "everywhere", unresolvedGrant: !ctx.grant });
+      const { revoked, keysForgotten } = await forgetPerson(ctx.env, ctx.props.hevyUserId);
+      log("user.disconnected", { userId: ctx.props.hevyUserId, revoked, keysForgotten, scope: "everywhere", unresolvedGrant: !ctx.grant });
       const legacyNote = everywhere ? "" : " (This connection could not be matched to one app, so every app was removed.)";
       const inviteNote = ctx.env.MCP_INVITE_CODE ? " You will need an invite link to reconnect." : "";
-      return `Disconnected everywhere. Removed ${revoked} app connection(s).${legacyNote} This server deleted the stored key and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
+      return `Disconnected everywhere. Removed ${revoked} app connection(s).${legacyNote} This server deleted every stored key for this Hevy account and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
     },
   );
 
@@ -446,11 +441,14 @@ export function buildServer(ctx: ToolContext): McpServer {
     "get_workout_events",
     'List workout changes (updated or deleted) since a date, newest first, so a cached copy of someone\'s workouts can be brought up to date without re-reading every page. Each event is { type: "updated", workout } or { type: "deleted", id, deleted_at }.',
     {
-      since: z.string().optional().describe("ISO 8601 date-time, e.g. 2026-08-01T00:00:00Z. Default: the beginning of time, which lists every workout as an 'updated' event."),
+      since: z.string().optional().describe("ISO 8601 date-time, e.g. 2026-08-01T00:00:00Z. Default 1970-01-01T00:00:00Z, which lists every workout as an 'updated' event."),
       page,
       pageSize: z.number().int().min(1).max(10).optional().describe("Events per page (default 5, max 10)."),
     },
-    ({ since, page, pageSize }, hevy) => hevy.getWorkoutEvents({ since, page: page ?? 1, pageSize: pageSize ?? 5 }),
+    // Hevy's spec says `since` defaults to 1970, but the live endpoint answers
+    // an omitted `since` with `{ workouts: [] }` and no events at all
+    // (checked with a real key 2026-09-02), so the default is sent explicitly.
+    ({ since, page, pageSize }, hevy) => hevy.getWorkoutEvents({ since: since ?? "1970-01-01T00:00:00Z", page: page ?? 1, pageSize: pageSize ?? 5 }),
   );
 
   reg(

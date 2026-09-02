@@ -23,13 +23,15 @@ let passes = 0;
  * Production KV serves a cached copy of a key for up to ~60s after it was
  * written or deleted, so a check that depends on a fresh write or a revocation
  * can lag there. Poll until `until` holds (at most 90s in production; one
- * attempt locally, where Miniflare's KV is immediately consistent).
+ * attempt locally, where Miniflare's KV is immediately consistent). Only the
+ * named stale state (`stale`) is retried; any other answer, a 500 say, is
+ * returned at once so the cache wait cannot hide an unrelated failure.
  */
-async function settles(attempt, until) {
+async function settles(attempt, until, stale) {
   const maxMs = /localhost|127\.0\.0\.1/.test(BASE) ? 0 : 90_000;
   const started = Date.now();
   let last = await attempt();
-  while (!until(last) && Date.now() - started < maxMs) {
+  while (!until(last) && stale(last) && Date.now() - started < maxMs) {
     await new Promise((r) => setTimeout(r, 3000));
     last = await attempt();
   }
@@ -246,6 +248,7 @@ async function main() {
       return { status: r.status, body: await r.json() };
     },
     (r) => r.status === 200,
+    (r) => r.status === 400 && r.body?.error === "invalid_grant",
   );
   const refreshBody = refresh.body;
   check(`refresh_token grant issues a new access token${refreshNote}`, refresh.status === 200 && typeof refreshBody.access_token === "string" && refreshBody.access_token !== token, JSON.stringify(refreshBody).slice(0, 200));
@@ -290,20 +293,47 @@ async function main() {
     try { body = JSON.parse(jsonText ?? ""); } catch {}
     return { status: r.status, body, raw: text.slice(0, 300) };
   };
+  // --- the six tools added 2026-09-02 (names, hints, one real read) ---
+  const wl = await rpc2("tools/list", {}, 12);
+  const wtools = wl.body?.result?.tools ?? [];
+  const byName = Object.fromEntries(wtools.map((tool) => [tool.name, tool]));
+  const added = ["update_routine", "update_body_measurement", "get_workout_events", "get_exercise_template", "get_routine_folder", "get_body_measurement"];
+  check("write grant lists the six tools added 2026-09-02", added.every((n) => byName[n]), added.filter((n) => !byName[n]).join(","));
+  check("update_routine is marked destructive, not read-only", byName.update_routine?.annotations?.destructiveHint === true && byName.update_routine?.annotations?.readOnlyHint === false, JSON.stringify(byName.update_routine?.annotations));
+  check("get_workout_events is marked read-only", byName.get_workout_events?.annotations?.readOnlyHint === true, JSON.stringify(byName.get_workout_events?.annotations));
+  const events = await rpc2("tools/call", { name: "get_workout_events", arguments: { pageSize: 1 } }, 13);
+  check("get_workout_events reaches Hevy (events array)", events.status === 200 && (events.body?.result?.content?.[0]?.text ?? "").includes('"events"'), events.raw);
+
   const bye = await rpc2("tools/call", { name: "disconnect", arguments: {} }, 7);
   check("disconnect (this app) answers", bye.status === 200 && (bye.body?.result?.content?.[0]?.text ?? "").includes("Disconnected this app"), bye.raw);
-  const { result: after, note: afterNote } = await settles(() => rpc2("tools/list", {}, 8), (r) => r.status === 401);
+  const { result: after, note: afterNote } = await settles(() => rpc2("tools/list", {}, 8), (r) => r.status === 401, (r) => r.status === 200);
   check(`that token is refused afterwards (401 → client re-runs OAuth)${afterNote}`, after.status === 401, `got ${after.status}`);
   const survivor = await rpc("tools/list", {}, 9);
   check("the other connection on the same key still works (disconnect is per app)", survivor.status === 200, `got ${survivor.status}`);
 
-  // Leave nothing behind: the read-only grant goes too, so smoke runs never
+  // Leave no grants behind: the read-only grant goes too, so smoke runs never
   // pile up year-long grants on the operator's real key or knock out the
-  // operator's live connections (they did, 2026-09-02).
+  // operator's live connections (they did, 2026-09-02). What a run does leave:
+  // the registered client record (expires in a year) and a refreshed
+  // member record for the operator, neither of which touches Hevy.
   const bye1 = await rpc("tools/call", { name: "disconnect", arguments: {} }, 10);
   check("cleanup: the read-only connection disconnects itself", bye1.status === 200 && (bye1.body?.result?.content?.[0]?.text ?? "").includes("Disconnected this app"), bye1.raw);
-  const { result: gone, note: goneNote } = await settles(() => rpc("tools/list", {}, 11), (r) => r.status === 401);
+  const { result: gone, note: goneNote } = await settles(() => rpc("tools/list", {}, 11), (r) => r.status === 401, (r) => r.status === 200);
   check(`cleanup: its token is refused afterwards${goneNote}`, gone.status === 401, `got ${gone.status}`);
+  // The refresh above minted a second access token on that grant. The
+  // provider validates a bearer against its own token record only, and
+  // revokeGrant finds sibling tokens through an eventually consistent list,
+  // so /mcp also checks the grant record itself; this is the check for that.
+  const sibling = async () => {
+    const r = await fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${refreshBody.access_token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "tools/list", params: {} }),
+    });
+    return { status: r.status };
+  };
+  const { result: sib, note: sibNote } = await settles(sibling, (r) => r.status === 401, (r) => r.status === 200);
+  check(`cleanup: the refreshed sibling token is refused too (grant gone)${sibNote}`, sib.status === 401, `got ${sib.status}`);
 
   finish();
 }

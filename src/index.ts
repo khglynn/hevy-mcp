@@ -54,6 +54,24 @@ const api = {
       parts.length === 3 && parts[0] === props.hevyUserId
         ? { id: parts[1], tokenKey: `token:${parts[0]}:${parts[1]}:${await sha256Hex(bearer)}` }
         : undefined;
+    // The provider validates a bearer against its token record alone, and a
+    // grant can hold several access tokens (each refresh mints one). Revoking
+    // a grant deletes the token records it can list, but KV lists are
+    // eventually consistent, so a straggler could outlive its grant by up to
+    // seven days. One extra read closes that: no grant, no service.
+    if (grant && (await env.OAUTH_KV.get(`grant:${props.hevyUserId}:${grant.id}`)) === null) {
+      log("mcp.reconnect_required", { reason: "grant_revoked" });
+      return new Response(
+        JSON.stringify({ error: "invalid_token", error_description: "This connection was disconnected. Reconnect the connector." }),
+        {
+          status: 401,
+          headers: {
+            "content-type": "application/json",
+            "www-authenticate": `Bearer error="invalid_token", error_description="connection revoked", resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
+          },
+        },
+      );
+    }
     const handler = createMcpHandler(() => buildServer({ env, props, origin, grant }), {
       route: "/mcp",
       allowedOriginHostnames: "*",

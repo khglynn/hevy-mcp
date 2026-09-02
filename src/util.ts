@@ -141,3 +141,27 @@ export async function revokeAllGrants(env: AppEnv, userId: string, onlyFingerpri
   } while (cursor);
   return revoked;
 }
+
+/**
+ * Forget a person entirely: every grant (best effort, KV list), the membership
+ * record, every key hash that points at them, the template cache. Shared by the
+ * `disconnect everywhere` tool and the admin "Remove person" button.
+ */
+export async function forgetPerson(env: AppEnv, userId: string): Promise<{ revoked: number; keysForgotten: number }> {
+  const revoked = await revokeAllGrants(env, userId);
+  const deletions: Promise<void>[] = [env.OAUTH_KV.delete(`member:${userId}`), env.OAUTH_KV.delete(`tplcache:${userId}`)];
+  let keysForgotten = 0;
+  let cursor: string | undefined;
+  do {
+    const page = await env.OAUTH_KV.list({ prefix: "memberkey:", cursor });
+    for (const k of page.keys) {
+      if ((await env.OAUTH_KV.get(k.name)) === userId) {
+        deletions.push(env.OAUTH_KV.delete(k.name));
+        keysForgotten++;
+      }
+    }
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  await Promise.all(deletions);
+  return { revoked, keysForgotten };
+}

@@ -39,7 +39,7 @@ import {
   memberKeyFor,
   operatorName,
   randomToken,
-  revokeAllGrants,
+  forgetPerson,
   sha256Hex,
   tipUrl,
 } from "./util";
@@ -296,7 +296,7 @@ app.get("/privacy", (c) => {
         <h2 style="margin-top:28px">Who can read it</h2>
         <p>${operator} runs this server and could technically read your key while it is in use. Nobody else can read the stored copy. It is a personal project with no support promise, and Hevy's developer access is unofficial: Hevy may change or remove it.</p>
         <h2 style="margin-top:28px">Leaving</h2>
-        <p><b>Tell your assistant "disconnect from Hevy".</b> Disconnects every app, deletes the stored key, forgets it.</p>
+        <p><b>Tell your assistant "disconnect from Hevy".</b> Removes that app's connection; other apps you connected keep working. Say "disconnect from Hevy everywhere" to remove every app, delete the stored key, and forget you.</p>
         <p><b>Or revoke the key on <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Hevy's Developer page</a>.</b> It stops working everywhere at once; this server drops its copy the next time an app tries to use it.</p>
         <p>Removing the connection inside Claude does not delete the stored key.</p>
         <section class="strip">
@@ -673,7 +673,7 @@ app.get("/admin", async (c) => {
       <td>${g.metadata?.name ?? "—"}<br /><span class="small">${g.userId}</span></td>
       <td>${g.metadata?.client ?? "—"}<br /><span class="small">${g.clientId.length > 28 ? g.clientId.slice(0, 28) + "…" : g.clientId}</span></td>
       <td>${g.metadata?.canWrite ? "read + write" : "read only"}</td>
-      <td>${g.createdAt ? new Date(g.createdAt * 1000).toISOString().slice(0, 10) : "—"}</td>
+      <td>${g.createdAt ? new Date(g.createdAt * 1000).toISOString().slice(0, 16).replace("T", " ") + " UTC" : "—"}<br /><span class="small">grant …${g.id.slice(-6)}</span></td>
       <td style="white-space:nowrap">
         <form method="POST" action="/admin/revoke" style="margin:0;display:inline">
           <input type="hidden" name="userId" value="${g.userId}" /><input type="hidden" name="grantId" value="${g.id}" />
@@ -728,18 +728,8 @@ app.post("/admin/remove", async (c) => {
   const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
   const userId = String(body.userId ?? "");
   if (userId) {
-    const revoked = await revokeAllGrants(c.env, userId);
-    const deletions: Promise<void>[] = [c.env.OAUTH_KV.delete(`member:${userId}`), c.env.OAUTH_KV.delete(`tplcache:${userId}`)];
-    let cursor: string | undefined;
-    do {
-      const page = await c.env.OAUTH_KV.list({ prefix: "memberkey:", cursor });
-      for (const k of page.keys) {
-        if ((await c.env.OAUTH_KV.get(k.name)) === userId) deletions.push(c.env.OAUTH_KV.delete(k.name));
-      }
-      cursor = page.list_complete ? undefined : page.cursor;
-    } while (cursor);
-    await Promise.all(deletions);
-    log("admin.removed", { userId, revoked });
+    const { revoked, keysForgotten } = await forgetPerson(c.env, userId);
+    log("admin.removed", { userId, revoked, keysForgotten });
   }
   return c.redirect("/admin");
 });
