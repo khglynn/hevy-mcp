@@ -223,10 +223,27 @@ async function main() {
     console.log("  skip admin checks (set OWNER_TOKEN)");
   }
 
+  // Re-authorizing the same client replaces its previous grant
+  // (revokeExistingGrants, the library default) — so the first token is dead now.
+  const stale = await rpc("tools/list", {}, 6);
+  check("re-authorizing the same client revoked the earlier grant (401)", stale.status === 401, `got ${stale.status}`);
+
   // --- disconnect revokes; the same token must then be refused ---
-  const bye = await rpc("tools/call", { name: "disconnect", arguments: {} }, 6);
+  const rpc2 = async (method, params = {}, id = 1) => {
+    const r = await fetch(`${BASE}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${tok2.access_token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    });
+    const text = await r.text();
+    const jsonText = text.startsWith("event:") || text.startsWith("data:") ? text.split("\n").find((l) => l.startsWith("data:"))?.slice(5).trim() : text;
+    let body = null;
+    try { body = JSON.parse(jsonText ?? ""); } catch {}
+    return { status: r.status, body, raw: text.slice(0, 300) };
+  };
+  const bye = await rpc2("tools/call", { name: "disconnect", arguments: {} }, 7);
   check("disconnect tool revokes grants", bye.status === 200 && (bye.body?.result?.content?.[0]?.text ?? "").includes("Disconnected"), bye.raw);
-  const after = await rpc("tools/list", {}, 7);
+  const after = await rpc2("tools/list", {}, 8);
   check("token is refused after disconnect (401 → client re-runs OAuth)", after.status === 401, `got ${after.status}`);
 
   finish();

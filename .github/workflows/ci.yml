@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run type-check
+      - name: Start wrangler dev
+        run: |
+          printf 'MCP_INVITE_CODE=ci-invite\nOWNER_TOKEN=ci-owner\n' > .dev.vars
+          (npx wrangler dev --port 8787 --local > wrangler-dev.log 2>&1 &)
+          for i in $(seq 1 60); do
+            curl -sf -o /dev/null http://localhost:8787/start && exit 0
+            sleep 1
+          done
+          echo "wrangler dev did not come up"; cat wrangler-dev.log; exit 1
+      - name: Smoke test (unauthenticated subset)
+        run: BASE=http://localhost:8787 INVITE=ci-invite OWNER_TOKEN=ci-owner npm run test:smoke
+      - name: Dev log on failure
+        if: failure()
+        run: cat wrangler-dev.log

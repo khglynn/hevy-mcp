@@ -1,66 +1,83 @@
 # hevy-mcp
 
-Self-hosted MCP server wrapping the [Hevy](https://hevy.com) workout API. Runs on Cloudflare Workers, gated by a self-issued OAuth passphrase, and connects to **both Claude and ChatGPT**.
+A remote MCP server for the [Hevy](https://hevy.com) workout app that anyone can connect to with **their own Hevy API key**. Runs on Cloudflare Workers, speaks real OAuth 2.1 (so Claude, ChatGPT, Claude Code and Cursor all accept it), and holds nothing but each person's key, encrypted inside their own OAuth grant.
 
-**Live:** `https://hevy-mcp.kevinhg.workers.dev/mcp` · **Account:** personal Cloudflare (`kevin@trimm.co`)
+Two ways to use it: connect to an instance someone runs for you, or deploy your own in about ten minutes.
 
-## What it does
+## Connect (you were sent an invite link)
 
-16 tools over the Hevy API — 10 read, 6 write:
+You need two things, both on a computer:
 
-- **Read:** workouts (list / by-id / count), routines (list / by-id), routine folders, exercise-template search, exercise history, body measurements, user info
-- **Write:** log a workout, update a workout, create routine / routine folder / custom exercise template / body measurement
+1. **Hevy Pro.** The Hevy API is a Pro feature; free accounts can't create a key.
+2. **A Hevy API key** from [hevy.com/settings?developer](https://hevy.com/settings?developer) (the website, not the phone app). Save it somewhere — Hevy shows it once.
 
-Reads work in both clients. Writes work from Claude; from ChatGPT they need a Business/Enterprise plan (Plus/Pro is read-only — a ChatGPT platform limit, not a server one).
+Then open the invite link you were sent, follow the two steps on that page, and paste your key when Claude opens the connect screen. Use a personal Claude account on the web or desktop app (work accounts usually block custom connectors; phones can use a connector but can't add one). Tick "let Claude add and edit" only if you want it to log workouts and create routines — Hevy has no undo.
 
-## How it's built
+Leaving: ask Claude to **"disconnect from Hevy"**, or rotate your key at Hevy. Either kills the stored key. See [PRIVACY.md](./PRIVACY.md) for what is stored and for how long.
 
-| Piece | Role |
-|-------|------|
-| `@cloudflare/workers-oauth-provider` | Real OAuth 2.1 + PKCE + DCR/CIMD. The "login" is a single passphrase you set — no Google/GitHub. |
-| `McpAgent` (Agents SDK) + SQLite Durable Object | The MCP server, one DO per session. Free tier. |
-| `src/hevy.ts` | Hevy API client — handles pagination (`pageSize ≤ 10`) and 429 backoff. |
-| Secrets | `HEVY_API_KEY` (your Hevy Pro key) + `MCP_PASSPHRASE` (the gate). Server-side, never in git. |
+## Deploy your own
 
-```
-src/
-  index.ts   OAuthProvider wiring + the HevyMCP Durable Object
-  mcp.ts     the 16 tools (each wrapped so Hevy errors surface, not swallow)
-  hevy.ts    Hevy API client (pagination + backoff)
-  auth.ts    passphrase /authorize screen + /approve
-```
-
-## Connect
-
-**Claude.ai:** Settings → Connectors → Add custom connector → paste the `/mcp` URL (leave Client ID/Secret blank) → enter the passphrase.
-
-**ChatGPT:** Settings → Apps & Connectors → Advanced → Developer Mode (web only) → add the `/mcp` URL → OAuth → passphrase.
-
-## Develop
+Prerequisites: a free Cloudflare account, Node 20+, and `npx wrangler login` done.
 
 ```bash
+git clone https://github.com/khglynn/hevy-mcp && cd hevy-mcp
 npm install
-npm run dev            # local at http://localhost:8787 (uses .dev.vars secrets)
-npm run type-check
+npx wrangler kv namespace create OAUTH_KV     # paste the id into wrangler.jsonc
+# edit wrangler.jsonc: your KV id; change or delete the custom-domain "routes" line
+openssl rand -hex 16 | tr -d '\n' | npx wrangler secret put MCP_INVITE_CODE   # required
+openssl rand -hex 16 | tr -d '\n' | npx wrangler secret put OWNER_TOKEN       # optional, unlocks /admin
+npx wrangler deploy
 ```
 
-`.dev.vars` holds `HEVY_API_KEY` + `MCP_PASSPHRASE` for local dev — it is **gitignored**.
+Then send people `https://<your-host>/start?invite=<MCP_INVITE_CODE>`. The invite rides in the link and is remembered by the browser; nobody types it. People who have connected before never need it again.
 
-## Deploy
+`/admin?token=<OWNER_TOKEN>` shows who is connected (name, client, read or write, since when) with a revoke button.
 
-Deploys to the **personal** Cloudflare account. Because an unlabeled `CLOUDFLARE_API_TOKEN` may sit in the shell env, every command unsets it so it uses the browser login:
+Local development:
 
 ```bash
-env -u CLOUDFLARE_API_TOKEN npx wrangler whoami     # confirm kevin@trimm.co first
-env -u CLOUDFLARE_API_TOKEN npx wrangler deploy
-# secrets (one-time / on change), piped without trailing newline:
-printf '%s' "<key>"  | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put HEVY_API_KEY
-printf '%s' "<pass>" | env -u CLOUDFLARE_API_TOKEN npx wrangler secret put MCP_PASSPHRASE
+cp .dev.vars.example .dev.vars   # fill in any values
+npm run dev                      # http://localhost:8787
+npm run type-check
+INVITE=<value from .dev.vars> OWNER_TOKEN=<value> HEVY_API_KEY=<your key> npm run test:smoke
 ```
 
-## Notes / limits
+The smoke test runs 43 checks against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the unauthenticated checks.
 
-- Hevy API requires **Hevy Pro**; the key lives at `hevy.com/settings?developer`.
-- Hevy's rate limit is undocumented and low — the client backs off on 429.
-- Webhooks exist but aren't in Hevy's published spec — deferred to v2.
-- `create_exercise_template` enums are validated server-side by Hevy; an error response lists valid values.
+## How it works
+
+```
+Claude ──OAuth──▶ /authorize (paste Hevy key, choose read-only or write)
+                   └─ key validated against Hevy → stored ENCRYPTED in the grant
+Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶ api.hevyapp.com
+```
+
+- **Per request, no sessions.** `createMcpHandler` (Cloudflare Agents SDK) builds a new server on every call from the token's decrypted props. Nothing is written to Durable Object storage; there is no session another user could reach.
+- **The key is the credential.** `@cloudflare/workers-oauth-provider` encrypts grant props with the access token as key material. A stored grant is unreadable without a live token.
+- **Only known clients get the key form.** Redirect URIs are allowlisted (claude.ai, claude.com, chatgpt.com, loopback for Claude Code, Cursor) at `/authorize` and at `/register`. Anything else sees a refusal, not a key field.
+- **A dead key heals itself.** If Hevy answers 401 to a tool call, the server revokes that person's grants and explains; the client's next request gets HTTP 401 and re-runs OAuth.
+- **Tokens:** 7-day access, 180-day refresh (rotated on use, so anyone active twice a year never re-pastes), S256 PKCE only.
+- **Writes are opt-in.** The six write tools exist only on grants where the box was ticked.
+
+## Tools
+
+| | Tool | Notes |
+|---|---|---|
+| account | `whoami` | Which Hevy account, which client, read or write |
+| account | `disconnect` | Revokes every grant for this person |
+| read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_exercise_history`, `get_body_measurements` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
+| read | `search_exercise_templates` | Template list cached per user for 6 hours |
+| write | `create_workout`, `update_workout`, `create_routine`, `create_routine_folder`, `create_exercise_template`, `create_body_measurement` | `update_workout` is a full overwrite; Hevy has no delete or undo |
+
+## Clients
+
+- **Claude** (web, desktop, Claude Code, mobile once added elsewhere): all plans, Free limited to one custom connector; Team and Enterprise need an Owner to add it.
+- **ChatGPT:** works, but needs Developer Mode, and write tools only run on Business, Enterprise and Edu plans (Plus and Pro are read-only). Not a server limit.
+- **Cursor:** works via its own OAuth callback.
+
+## Limits and honesty
+
+- Hevy's API is unofficial: Pro-only, undocumented rate limits (the client backs off on 429), no delete endpoints, and Hevy says it may change or withdraw it.
+- This is a personal project. No support promised. The privacy statement is [PRIVACY.md](./PRIVACY.md).
+
+MIT © Kevin HG. Prior art worth knowing: [chrisdoc/hevy-mcp](https://github.com/chrisdoc/hevy-mcp), a larger project with a local install and its own hosted endpoint.

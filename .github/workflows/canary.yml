@@ -1,0 +1,30 @@
+name: canary
+
+# Weekly "is it up" check against production. Unauthenticated on purpose: it
+# proves discovery, the OAuth challenge and the start page, which is what a
+# new person hits first. A failure emails the repo owner.
+
+on:
+  schedule:
+    - cron: "17 14 * * 1" # Mondays 14:17 UTC
+  workflow_dispatch:
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BASE: https://hevy.kevinhg.com
+    steps:
+      - name: Discovery advertises S256-only PKCE and CIMD
+        run: |
+          meta=$(curl -sf --max-time 20 "$BASE/.well-known/oauth-authorization-server")
+          echo "$meta" | grep -q '"code_challenge_methods_supported":\["S256"\]'
+          echo "$meta" | grep -q '"client_id_metadata_document_supported":true'
+      - name: /mcp challenges with 401 + WWW-Authenticate
+        run: |
+          code=$(curl -s --max-time 20 -o /dev/null -w '%{http_code}' -D headers.txt -X POST "$BASE/mcp")
+          test "$code" = "401"
+          grep -qi '^www-authenticate: bearer' headers.txt
+      - name: /start renders with the /mcp URL
+        run: curl -sf --max-time 20 "$BASE/start" | grep -q "$BASE/mcp"

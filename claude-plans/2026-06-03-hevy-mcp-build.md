@@ -1,7 +1,7 @@
 # hevy-mcp — build record
 
 **Created:** 2026-06-03
-**Status:** Deployed + verified live
+**Status:** Historical — the single-user passphrase design described here was replaced on 2026-09-01 by bring-your-own-key (see `2026-09-01-friends-multi-user-decision.md`).
 
 ## Goal
 
@@ -26,7 +26,7 @@ Verified (today, against official docs) that the research doc's "use a bearer to
 ## Notable gotchas (also in the collection LESSONS.md)
 
 - **CIMD needs two switches** (the OAuthProvider option *and* the compat flag) — Codex review gate caught the half-fix.
-- **Account safety:** an unlabeled `CLOUDFLARE_API_TOKEN` in the env couldn't be traced to an account; used browser login + `whoami` confirmation + `env -u CLOUDFLARE_API_TOKEN` on every deploy to guarantee personal.
+- **Account safety:** confirm the Cloudflare account with `wrangler whoami` before every deploy. (Superseded 2026-07-27 by account-qualified tokens; see CLAUDE.md.)
 - **New workers.dev subdomain** (`kevinhg`) took ~55s for its TLS cert to propagate before the URL responded.
 
 ## v2 / follow-ups

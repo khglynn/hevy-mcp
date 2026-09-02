@@ -1,14 +1,16 @@
 {
   "name": "hevy-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Self-hosted MCP server wrapping the Hevy workout API. OAuth-gated (self-issued passphrase), runs on Cloudflare Workers. Connects to both Claude and ChatGPT.",
+  "description": "Remote MCP server for the Hevy workout app. Each person connects with their own Hevy API key over OAuth 2.1; stateless Cloudflare Worker; works with Claude, ChatGPT, Claude Code and Cursor.",
+  "license": "MIT",
   "scripts": {
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test:smoke": "node test/smoke.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "0.10.3",
