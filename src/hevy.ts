@@ -1,11 +1,13 @@
 /**
  * Thin client for the Hevy API (https://api.hevyapp.com/v1).
  *
- * Two realities this client handles so the tools don't have to:
+ * Three realities this client handles so the tools don't have to:
  *  - Pagination: every list endpoint caps `pageSize` at 10 (except exercise
  *    templates at 100). `paginate()` loops pages up to a safety cap.
  *  - Rate limiting: Hevy returns 429 with an undocumented, low ceiling.
  *    `request()` retries with backoff (honoring Retry-After when present).
+ *  - Template search is the most-called tool and costs up to six upstream
+ *    requests per call, so the template list is cached per user in KV.
  */
 
 const BASE = "https://api.hevyapp.com/v1";
@@ -15,15 +17,47 @@ export class HevyError extends Error {
     public status: number,
     public body: string,
   ) {
-    super(`Hevy API ${status}: ${body.slice(0, 400)}`);
+    super(`Hevy API ${status}: ${body.slice(0, 200)}`);
     this.name = "HevyError";
   }
+}
+
+export interface HevyUser {
+  id: string;
+  name: string;
+  url: string;
+}
+
+/**
+ * Prove a key is real by asking Hevy who it belongs to. One request, no
+ * retries: a 401 here means "Hevy rejected the key", and that is the answer.
+ */
+export async function validateHevyKey(apiKey: string): Promise<HevyUser> {
+  const res = await fetch(`${BASE}/user/info`, { headers: { "api-key": apiKey } });
+  const text = await res.text();
+  if (!res.ok) throw new HevyError(res.status, text);
+  const data = (JSON.parse(text) as { data?: Partial<HevyUser> }).data;
+  if (!data || typeof data.id !== "string" || !data.id) throw new HevyError(502, "user info had no id");
+  return {
+    id: data.id,
+    name: typeof data.name === "string" ? data.name : "",
+    url: typeof data.url === "string" ? data.url : "",
+  };
+}
+
+export interface TemplateCache {
+  kv: KVNamespace;
+  key: string;
+  ttlSeconds: number;
 }
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
 export class HevyClient {
-  constructor(private apiKey: string) {}
+  constructor(
+    private apiKey: string,
+    private cache?: TemplateCache,
+  ) {}
 
   private async request(
     method: string,
@@ -83,6 +117,9 @@ export class HevyClient {
   }
 
   // ---------- reads ----------
+  getUserInfo() {
+    return this.request("GET", "/user/info");
+  }
   getWorkoutCount() {
     return this.request("GET", "/workouts/count");
   }
@@ -107,21 +144,34 @@ export class HevyClient {
   getBodyMeasurements(query: { page?: number; pageSize?: number }) {
     return this.request("GET", "/body_measurements", { query });
   }
-  getUserInfo() {
-    return this.request("GET", "/user/info");
-  }
 
   /**
-   * Search exercise templates by title (case-insensitive substring).
-   * Pages through the big template list (pageSize 100) to find matches —
-   * how you get the `exercise_template_id` needed to build workouts/routines.
+   * The full template list (Hevy's built-ins plus this user's customs), cached
+   * per user. Near-static data; the cache is dropped when a custom template is
+   * created and expires on its own otherwise.
    */
-  async searchExerciseTemplates(q: { query?: string; limit?: number }): Promise<any[]> {
-    const limit = q.limit ?? 20;
+  private async allTemplates(): Promise<any[]> {
+    if (this.cache) {
+      const hit = await this.cache.kv.get<any[]>(this.cache.key, "json");
+      if (Array.isArray(hit)) return hit;
+    }
     const all = await this.paginate("/exercise_templates", "exercise_templates", {
       pageSize: 100,
       maxPages: 6, // up to 600 templates — covers Hevy's built-in set + customs
     });
+    if (this.cache && all.length > 0) {
+      await this.cache.kv.put(this.cache.key, JSON.stringify(all), { expirationTtl: this.cache.ttlSeconds });
+    }
+    return all;
+  }
+
+  /**
+   * Search exercise templates by title (case-insensitive substring) — how you
+   * get the `exercise_template_id` needed to build workouts/routines.
+   */
+  async searchExerciseTemplates(q: { query?: string; limit?: number }): Promise<any[]> {
+    const limit = q.limit ?? 20;
+    const all = await this.allTemplates();
     const needle = q.query?.trim().toLowerCase();
     const matched = needle
       ? all.filter((t) => String(t.title ?? "").toLowerCase().includes(needle))
@@ -144,8 +194,10 @@ export class HevyClient {
       body: { routine_folder: { title } },
     });
   }
-  createExerciseTemplate(exercise: unknown) {
-    return this.request("POST", "/exercise_templates", { body: { exercise } });
+  async createExerciseTemplate(exercise: unknown) {
+    const created = await this.request("POST", "/exercise_templates", { body: { exercise } });
+    if (this.cache) await this.cache.kv.delete(this.cache.key);
+    return created;
   }
   createBodyMeasurement(measurement: unknown) {
     return this.request("POST", "/body_measurements", { body: measurement });

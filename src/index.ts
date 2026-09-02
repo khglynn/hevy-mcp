@@ -1,67 +1,96 @@
 /**
  * Entry point. workers-oauth-provider wraps everything: it owns /token,
  * /register and token verification, routes authenticated /mcp traffic to the
- * HevyMCP Durable Object, and hands everything else to the auth Hono app
- * (homepage + /authorize passphrase gate).
+ * stateless MCP handler with the grant's decrypted props on ctx.props, and
+ * hands everything else to the Hono pages app (start, authorize, privacy,
+ * admin).
  *
- * We also wrap the provider's fetch to inject connector branding (`logo_uri`)
- * into the OAuth discovery metadata — that's what gives the connector a real
- * icon instead of a generic globe (see the branding note below).
+ * The provider's fetch is wrapped once more to inject connector branding
+ * (`logo_uri`) into the OAuth discovery metadata.
  */
 
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { McpAgent } from "agents/mcp";
-import authApp from "./auth";
-import { FAVICON_DATA_URI } from "./favicon";
-import { registerHevyTools } from "./mcp";
+import { createMcpHandler } from "agents/mcp/server";
+import { identifyClient } from "./clients";
+import pages from "./pages";
+import { buildServer, isHevyProps } from "./mcp";
+import { type AppEnv, log } from "./util";
 
-export class HevyMCP extends McpAgent<Env> {
-  // serverInfo title + icons (MCP 2025-11 spec). NOTE: a host reads serverInfo
-  // icons only AFTER connecting, and support is uneven. The connector-CARD icon
-  // (pre-auth, in the connectors list) comes from `logo_uri` in the OAuth
-  // metadata, injected below. See CLAUDE.md "Icon".
-  server = new McpServer({
-    name: "hevy-mcp",
-    version: "0.1.0",
-    title: "Hevy",
-    icons: [{ src: FAVICON_DATA_URI, mimeType: "image/png", sizes: ["128x128"] }],
-  });
+const DAY = 24 * 60 * 60;
 
-  async init() {
-    registerHevyTools(this.server, this.env);
-  }
-}
+/**
+ * Authenticated /mcp requests. The provider has already validated the bearer
+ * token and decrypted its props onto ctx.props. Anything that is not a v2
+ * grant (a pre-cutover token with empty props, say) gets an HTTP 401 so the
+ * client re-runs OAuth instead of sending `api-key: undefined` to Hevy.
+ */
+const api = {
+  async fetch(request: Request, env: AppEnv, ctx: ExecutionContext): Promise<Response> {
+    const origin = new URL(request.url).origin;
+    const props = (ctx as ExecutionContext & { props?: unknown }).props;
+    if (!isHevyProps(props)) {
+      log("mcp.reconnect_required", { reason: props && typeof props === "object" ? "props_shape" : "no_props" });
+      return new Response(
+        JSON.stringify({ error: "invalid_token", error_description: "Reconnect this connector and paste your Hevy API key." }),
+        {
+          status: 401,
+          headers: {
+            "content-type": "application/json",
+            "www-authenticate": `Bearer error="invalid_token", error_description="reconnect required", resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp"`,
+          },
+        },
+      );
+    }
+    const handler = createMcpHandler(() => buildServer({ env, props, origin }), { route: "/mcp" });
+    return handler(request, env, ctx);
+  },
+};
 
-const provider = new OAuthProvider({
+const provider = new OAuthProvider<AppEnv>({
   apiRoute: "/mcp",
-  apiHandler: HevyMCP.serve("/mcp"),
-  defaultHandler: authApp,
+  apiHandler: api,
+  defaultHandler: pages,
   authorizeEndpoint: "/authorize",
   tokenEndpoint: "/token",
   clientRegistrationEndpoint: "/register",
-  // CIMD (ChatGPT's preferred client registration). Requires BOTH this option
-  // AND the global_fetch_strictly_public compat flag in wrangler.jsonc. Clients
-  // that don't use CIMD fall back to Dynamic Client Registration automatically.
+  // CIMD (ChatGPT's and Claude Code's preferred client registration). Requires
+  // BOTH this option AND the global_fetch_strictly_public compat flag in
+  // wrangler.jsonc. Clients that don't use CIMD fall back to DCR.
   clientIdMetadataDocumentEnabled: true,
-  // 90-day access tokens (default is 1 hour). Single-user personal server:
-  // hour-long tokens meant a re-auth prompt nearly every session because
-  // clients' silent refresh proved unreliable here. Refresh tokens are left
-  // at the library default (no expiry), so refresh still works where clients
-  // do it right; this just stops the constant re-auth when they don't.
-  accessTokenTTL: 90 * 24 * 60 * 60,
+  // S256 only. Claude and ChatGPT always send S256; `plain` protects nothing.
+  allowPlainPKCE: false,
+  // A token here is also the decryption key for someone's Hevy credential, so
+  // access tokens are short. Clients refresh silently; every refresh restarts
+  // the refresh token's clock, so anyone active twice a year never re-pastes.
+  accessTokenTTL: 7 * DAY,
+  refreshTokenTTL: 180 * DAY,
+  // DCR client records (claude.ai registers once per connector) outlive grants.
+  clientRegistrationTTL: 365 * DAY,
+  // Belt and braces for the allowlist enforced at /authorize: a dynamic
+  // registration whose redirect URIs aren't all recognised clients is refused.
+  clientRegistrationCallback: ({ clientMetadata }) => {
+    const uris = clientMetadata.redirect_uris;
+    const allKnown =
+      Array.isArray(uris) && uris.length > 0 && uris.every((u) => typeof u === "string" && identifyClient(u) !== null);
+    if (allKnown) return;
+    log("oauth.registration_refused", { redirect_uris: uris });
+    return {
+      code: "invalid_redirect_uri",
+      description: "This server only connects to Claude, ChatGPT, Claude Code and Cursor.",
+      status: 400,
+    };
+  },
+  onError: ({ code, description, status }) => {
+    log("oauth.error", { code, description, status });
+  },
 });
 
-// Connector-card branding. Hosts (Claude, ChatGPT) read `logo_uri` from the
-// OAuth discovery metadata PRE-auth to show a custom icon instead of a generic
-// globe. The provider doesn't expose that field, so we inject it into the two
-// .well-known documents, pointed at the unauthenticated /favicon.png. This is
-// the mechanism real-world connectors use today; serverInfo.icons (above) is
-// the post-connect fallback for clients that read it.
-// Match the root forms AND the path-specific variants (RFC 9728/8414) used for
-// a resource at a sub-path — e.g. /.well-known/oauth-protected-resource/mcp,
-// which is exactly where the 401's WWW-Authenticate sends MCP clients for the
-// /mcp resource. An exact match would miss it and the icon wouldn't render.
+// Connector-card branding. Hosts read `logo_uri` from the OAuth discovery
+// metadata PRE-auth. The provider doesn't expose that field, so it is injected
+// into the two .well-known documents, pointed at the unauthenticated
+// /favicon.png. Match the root forms AND the path-specific variants (RFC
+// 9728/8414) — e.g. /.well-known/oauth-protected-resource/mcp, which is where
+// the 401's WWW-Authenticate sends MCP clients.
 function isOAuthMetadataPath(pathname: string): boolean {
   return (
     pathname.startsWith("/.well-known/oauth-authorization-server") ||
@@ -70,7 +99,7 @@ function isOAuthMetadataPath(pathname: string): boolean {
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: AppEnv, ctx: ExecutionContext): Promise<Response> {
     const res = await provider.fetch(request, env, ctx);
     const url = new URL(request.url);
     if (request.method === "GET" && isOAuthMetadataPath(url.pathname) && res.ok) {
@@ -89,4 +118,4 @@ export default {
     }
     return res;
   },
-};
+} satisfies ExportedHandler<AppEnv>;

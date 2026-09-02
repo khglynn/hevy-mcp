@@ -3,38 +3,46 @@
  * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
  *
  * Secrets (NOT here — set via `wrangler secret put` / `.dev.vars`):
- *   HEVY_API_KEY   — your Hevy Pro API key (hevy.com/settings?developer)
- *   MCP_PASSPHRASE — the passphrase that gates the OAuth login
+ *   MCP_INVITE_CODE — required. Generated (`openssl rand -hex 16`), carried in
+ *                     the /start?invite= link Kevin sends. The server refuses
+ *                     every new connection when it is unset (fail closed).
+ *   OWNER_TOKEN     — optional. Unlocks /admin (who is connected, revoke).
+ *                     /admin is a 404 when unset.
+ *
+ * Deploying to your own account: replace the KV namespace id below with the
+ * one `wrangler kv namespace create OAUTH_KV` prints, and change or drop the
+ * custom-domain route.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "hevy-mcp",
   "main": "src/index.ts",
-  "compatibility_date": "2025-03-10",
+  "compatibility_date": "2026-08-15",
   // global_fetch_strictly_public is one of the two requirements for CIMD (the
   // other is clientIdMetadataDocumentEnabled:true in src/index.ts); it also
   // hardens the provider's outbound fetch against SSRF.
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  // v1 created the per-session Durable Object; v2 retires it. The server is
+  // stateless per request now — the Hevy key lives only inside the OAuth grant.
   "migrations": [
-    {
-      "new_sqlite_classes": ["HevyMCP"],
-      "tag": "v1"
-    }
+    { "tag": "v1", "new_sqlite_classes": ["HevyMCP"] },
+    { "tag": "v2", "deleted_classes": ["HevyMCP"] }
   ],
-  "durable_objects": {
-    "bindings": [
-      {
-        "class_name": "HevyMCP",
-        "name": "MCP_OBJECT"
-      }
-    ]
-  },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
       "id": "f54353b1576f4198badedc122931afb8"
     }
   ],
+  // Best-effort brake on POST /approve (per Cloudflare location, approximate).
+  // The real gate is the invite code's entropy; this and the KV failure
+  // counter in pages.ts just make brute force expensive.
+  "ratelimits": [
+    { "name": "APPROVE_RL", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } }
+  ],
+  // The published URL. Cloudflare creates the DNS record on deploy; the
+  // workers.dev hostname keeps working alongside it.
+  "routes": [{ "pattern": "hevy.kevinhg.com", "custom_domain": true }],
   "observability": {
     "enabled": true
   }
