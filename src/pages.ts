@@ -40,6 +40,7 @@ import {
   randomToken,
   revokeAllGrants,
   sha256Hex,
+  tipUrl,
 } from "./util";
 
 type Vars = { nonce: string };
@@ -145,6 +146,8 @@ const layout = (body: unknown, title: string, page: string) => html`<!doctype ht
         .strip a { white-space: nowrap; }
         sup a { text-decoration: none; color: var(--tape); font-weight: 700; }
         .preview { margin: 0 0 18px; }
+        .tip { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; font-family: "Barlow Condensed", sans-serif; font-weight: 700; font-size: 16px; letter-spacing: .06em; text-transform: uppercase; color: var(--ash); text-decoration: none; }
+        .tip:hover { color: var(--tape); }
         table { width: 100%; border-collapse: collapse; font-size: 15px; }
         th { font-family: "Barlow Condensed", sans-serif; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ash); font-size: 15px; }
         th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--edge); vertical-align: top; }
@@ -168,10 +171,9 @@ app.get("/favicon.ico", (c) =>
 );
 
 // ---------- /start — the link the operator sends ----------
-function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string, nonce: string) {
+function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string, tip: string | null, nonce: string) {
   return layout(
-    html`<div class="eyebrow">Hevy → Claude</div>
-      <h1>Connect Hevy<br />to Claude.</h1>
+    html`<h1>Connect Hevy<br />to Claude.</h1>
       <p class="lede">Build routines, add exercises, log workouts, and pull your whole Hevy history into any<sup><a href="#any-ai">*</a></sup> AI assistant.</p>
       ${inviteState === "ok" ? html`<div class="banner ok">Invite saved. Follow the steps below.</div>` : ""}
       ${inviteState === "bad" ? html`<div class="banner err">This invite link isn't right. Open the original link exactly as it was sent to you.</div>` : ""}
@@ -209,6 +211,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
       <section class="strip">
         <p id="any-ai">* Claude on the web, desktop, or Claude Code. Also ChatGPT (full access on Business, Enterprise, and Edu; read-only on Pro) and Cursor: add the same address in that app.</p>
         <p>This server runs on ${operator}'s Cloudflare account. It stores your key in encrypted form and uses it only to reach Hevy for you. ${operator} could technically read the key. To leave, tell Claude "disconnect from Hevy" or revoke the key on Hevy's Developer page. <a href="/privacy">See what's stored and for how long →</a></p>
+        ${tip ? html`<a class="tip" href="${tip}" target="_blank" rel="noopener noreferrer">☕ Built by ${operator}. Buy him a coffee</a>` : ""}
       </section>
       <script nonce="${nonce}">
         (function () {
@@ -240,28 +243,31 @@ function handleStart(c: Context<{ Bindings: AppEnv; Variables: Vars }>) {
       log("start.bad_invite", {});
     }
   }
-  return c.html(startPage(origin, state, operatorName(c.env), c.get("nonce")));
+  return c.html(startPage(origin, state, operatorName(c.env), tipUrl(c.env), c.get("nonce")));
 }
 
 // ---------- /privacy ----------
 app.get("/privacy", (c) => {
   const operator = operatorName(c.env);
+  const tip = tipUrl(c.env);
   return c.html(
     layout(
-      html`<div class="eyebrow">Hevy → Claude · what's kept</div>
-        <h1>What this server keeps.</h1>
-        <p><b>Your Hevy API key.</b> This server stores an encrypted copy in Cloudflare. Your connected app holds what is needed to unlock it, so the stored copy cannot be read on its own. The server unlocks the key only while sending your request to Hevy. It never stores an unencrypted copy or writes the key to logs.</p>
-        <p><b>Your Hevy display name and connection details.</b> In addition to the encrypted key above, this server stores one-way fingerprints of your Hevy account and key, the dates you connected, and the app you used: Claude, ChatGPT, Claude Code, or Cursor. This lets ${operator} see who is connected and lets you reconnect later.</p>
-        <p><b>Your workouts stay in Hevy.</b> This server does not store workout, routine, or measurement data. It does keep an unencrypted copy of your exercise list (Hevy's built-in exercises and any custom ones) for six hours, so it does not have to ask Hevy for the same list repeatedly.</p>
+      html`<h1>What this<br />server keeps.</h1>
+        <p><b>Your Hevy API key.</b> Stored encrypted in Cloudflare. Only your connected app can unlock it, and only while a request is on its way to Hevy. It is never logged and never stored in the clear.</p>
+        <p><b>Your name and connection details.</b> Your Hevy display name, one-way fingerprints of your account and key, the date you connected, and the app you used. That is how ${operator} sees who is connected, and how you reconnect later.</p>
+        <p><b>Not your workouts.</b> Nothing from your training log is stored here; requests go to Hevy and back. One exception: your exercise list is cached for six hours so the server doesn't ask Hevy for it on every search.</p>
         <h2 style="margin-top:28px">How long</h2>
-        <p>Your connection lasts for one year from the day you connect, no matter how often you use it. Your app renews its short-term access every seven days in the background, but that does not extend the one-year limit. After one year, the connection and encrypted key are deleted, and your assistant asks you to paste the key again. Your Hevy key will still be on Hevy's Developer page unless you revoked it. Your display name, account and key fingerprints, and connection dates are also kept for up to one year. Disconnecting deletes them sooner.</p>
+        <p>One year from the day you connect, however often you use it. Your app refreshes its short-term access every seven days in the background; that doesn't extend the year. After a year the connection and the encrypted key are deleted and your assistant asks for the key again. Disconnecting deletes everything sooner.</p>
         <h2 style="margin-top:28px">Who can read it</h2>
-        <p>${operator} runs this server on a personal Cloudflare account and could technically read your key while the server is using it. Nobody else can read the stored copy. This is a personal project with no support promise. Hevy's developer access is unofficial, and Hevy says it may change or remove it.</p>
+        <p>${operator} runs this server and could technically read your key while it is in use. Nobody else can read the stored copy. It is a personal project with no support promise, and Hevy's developer access is unofficial: Hevy may change or remove it.</p>
         <h2 style="margin-top:28px">Leaving</h2>
-        <p><b>Tell your assistant "disconnect from Hevy".</b> This disconnects every app using this server, deletes the stored key, and forgets the key you used.</p>
-        <p><b>Or revoke the key on <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Hevy's Developer page</a>.</b> It stops working immediately everywhere it was used, including this server. This server deletes its stored copy the next time an app tries to use it.</p>
-        <p>Removing the connection from Claude does not delete the stored key. Use one of the options above.</p>
-        <p class="fine" style="margin-top:28px"><a href="/start">← Back to the start page</a></p>`,
+        <p><b>Tell your assistant "disconnect from Hevy".</b> Disconnects every app, deletes the stored key, forgets it.</p>
+        <p><b>Or revoke the key on <a href="${HEVY_DEVELOPER_URL}" target="_blank" rel="noopener noreferrer">Hevy's Developer page</a>.</b> It stops working everywhere at once; this server drops its copy the next time an app tries to use it.</p>
+        <p>Removing the connection inside Claude does not delete the stored key.</p>
+        <section class="strip">
+          <p><a href="/start">← Back to the start page</a></p>
+          ${tip ? html`<a class="tip" href="${tip}" target="_blank" rel="noopener noreferrer">☕ Buy ${operator} a coffee</a>` : ""}
+        </section>`,
       "What this server keeps",
       "privacy",
     ),
@@ -285,8 +291,7 @@ interface ConnectPageOpts {
 function connectPage(o: ConnectPageOpts) {
   const who = describeClient(o.client);
   return layout(
-    html`<div class="eyebrow">Hevy → ${o.client}</div>
-      <h1>Connect Hevy<br />to ${o.client}.</h1>
+    html`<h1>Connect Hevy<br />to ${o.client}.</h1>
       <p class="lede">You're connecting <b>${who}</b> to your own Hevy account. No one else's account is involved.</p>
       ${o.preview ? html`<div class="banner note preview">Preview only. The real version of this page opens from ${o.client} when you add the connector.</div>` : ""}
       ${o.error ? html`<div class="banner err">${o.error}</div>` : ""}
@@ -330,8 +335,7 @@ function connectPage(o: ConnectPageOpts) {
 
 const expiredPage = () =>
   layout(
-    html`<div class="eyebrow">Hevy → Claude</div>
-      <h1>Connection page expired.</h1>
+    html`<h1>Connection page expired.</h1>
       <p>Return to your assistant and choose Connect again. If this keeps happening, open <a href="/start">the start page</a> and follow the steps again.</p>`,
     "Connection page expired",
     "expired",
@@ -339,8 +343,7 @@ const expiredPage = () =>
 
 const refusalPage = (operator: string) =>
   layout(
-    html`<div class="eyebrow">Hevy → ?</div>
-      <h1>We didn't recognise<br />this app.</h1>
+    html`<h1>We didn't recognise<br />this app.</h1>
       <p>This server connects only to Claude, ChatGPT, Claude Code, and Cursor, so it did not show the key form. If you are using one of those apps, tell ${operator}.</p>`,
     "App not recognised",
     "refused",
@@ -391,14 +394,14 @@ async function bumpFails(env: AppEnv, key: string): Promise<void> {
   await env.OAUTH_KV.put(key, String(n), { expirationTtl: 60 * 60 });
 }
 
-function successPage(name: string, redirectTo: string, canWrite: boolean, client: string) {
+function successPage(name: string, redirectTo: string, canWrite: boolean, client: string, operator: string, tip: string | null) {
   return layout(
-    html`<meta http-equiv="refresh" content="2;url=${redirectTo}" />
-      <div class="eyebrow">Hevy → ${client}</div>
+    html`<meta http-equiv="refresh" content="4;url=${redirectTo}" />
       <div class="stamp">Connected</div>
       <h2>Connected as ${name || "your Hevy account"}</h2>
       <p>${canWrite ? `You can now ask ${client} to read your workouts and add or edit them.` : `${client} can now read your workouts. To let it add or edit them, reconnect and choose Read + write.`}</p>
-      <p class="fine">Returning to ${client}… If nothing happens, <a href="${redirectTo}">continue</a>. Wrong Hevy account? <a href="/start">Start over</a>.</p>`,
+      <p class="fine">Returning to ${client}… If nothing happens, <a href="${redirectTo}">continue</a>. Wrong Hevy account? <a href="/start">Start over</a>.</p>
+      ${tip ? html`<a class="tip" href="${tip}" target="_blank" rel="noopener noreferrer">☕ Useful? Buy ${operator} a coffee</a>` : ""}`,
     "Connected",
     "connected",
   );
@@ -420,8 +423,7 @@ app.post("/approve", async (c) => {
     log("approve.throttled", { fails, rateLimited: !rl.success });
     return c.html(
       layout(
-        html`<div class="eyebrow">Hevy → Claude</div>
-          <h1>Too many tries.</h1>
+        html`<h1>Too many tries.</h1>
           <p>Wait one minute, then try again. If it still fails, tell ${operatorName(c.env)}.</p>`,
         "Too many tries",
         "throttled",
@@ -527,7 +529,7 @@ app.post("/approve", async (c) => {
     c.env.OAUTH_KV.put(memberKey, userId, { expirationTtl: 365 * DAY }),
   ]);
   log("approve.connected", { userId, client, canWrite, returning: !!existing });
-  return c.html(successPage(user.name, redirectTo, canWrite, client));
+  return c.html(successPage(user.name, redirectTo, canWrite, client, operatorName(c.env), tipUrl(c.env)));
 });
 
 // ---------- /admin — owner only ----------

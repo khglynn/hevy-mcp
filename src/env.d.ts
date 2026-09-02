@@ -10,4 +10,6 @@ interface Env {
   OWNER_TOKEN?: string;
   /** Who runs this deployment, as named on the connect and privacy pages. Set as a secret so it survives deploys and stays out of the repo. */
   OPERATOR_NAME?: string;
+  /** Optional. An https link (Buy Me a Coffee, Ko-fi) shown lightly on a few pages. */
+  TIP_URL?: string;
 }

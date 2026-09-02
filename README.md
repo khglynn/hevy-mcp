@@ -37,6 +37,7 @@ npx wrangler kv namespace create OAUTH_KV     # paste the id into wrangler.jsonc
 OWNER=$(openssl rand -hex 16); echo "owner token: $OWNER"
 printf '%s' "$OWNER" | npx wrangler secret put OWNER_TOKEN        # optional, unlocks /admin
 printf '%s' "Your Name" | npx wrangler secret put OPERATOR_NAME   # named on the connect + privacy pages
+printf '%s' "https://buymeacoffee.com/you" | npx wrangler secret put TIP_URL   # optional tip link on three pages
 npx wrangler deploy
 ```
 

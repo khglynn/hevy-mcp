@@ -13,6 +13,8 @@
  *                     it as a secret so it survives deploys and stays out of
  *                     the public repo; unset, the pages say "the person who
  *                     runs this server".
+ *   TIP_URL         — optional. An https link (Buy Me a Coffee, Ko-fi) shown
+ *                     lightly on the start, connected, and privacy pages.
  *
  * Deploying to your own account: replace the KV namespace id below with the
  * one `wrangler kv namespace create OAUTH_KV` prints, change or drop the

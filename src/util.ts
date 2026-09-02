@@ -84,6 +84,12 @@ export function randomToken(): string {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 }
 
+/** Optional "buy me a coffee" style link, shown lightly on the start, connected, and privacy pages when TIP_URL is set. */
+export function tipUrl(env: { TIP_URL?: string }): string | null {
+  const u = (env.TIP_URL ?? "").trim();
+  return /^https:\/\//.test(u) ? u : null;
+}
+
 /** The operator's name for user-facing copy. OPERATOR_NAME is set as a secret (survives deploys, stays out of the repo). */
 export function operatorName(env: { OPERATOR_NAME?: string }): string {
   const n = (env.OPERATOR_NAME ?? "").trim();
