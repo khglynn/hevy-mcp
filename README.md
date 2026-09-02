@@ -11,7 +11,13 @@ You need two things, both on a computer:
 1. **Hevy Pro.** The Hevy API is a Pro feature; free accounts can't create a key.
 2. **A Hevy API key** from [hevy.com/settings?developer](https://hevy.com/settings?developer) (the website, not the phone app). Save it somewhere — Hevy shows it once.
 
-Then open the invite link you were sent. That page walks you through it: get your key from Hevy, copy the connector address it shows you into Claude (Settings → Connectors → Add custom connector), and paste your key when Claude asks. Use a personal Claude account on the web or desktop app — work and school accounts usually block custom connectors, and phones can use a connector but can't add one. Tick "let Claude add and edit" only if you want it to log workouts and create routines; Hevy has no undo.
+Then open the invite link you were sent. That page has the steps and a Copy button for the address you'll need. In short:
+
+1. Get your key from Hevy and save it somewhere; Hevy shows it once.
+2. In Claude on the web or desktop: **Customize → Connectors → + → Add custom connector**. Paste the address from that page; leave Client ID and Client Secret blank. On a Team or Enterprise account an Owner adds it under Organization settings → Connectors, then you click Connect.
+3. Claude opens a page asking for your Hevy key. Paste it and press Connect.
+
+A phone can use the connector once it is added on a computer, but can't add one. There is a checkbox, "let Claude add and edit": leave it off and Claude can only read your workouts; tick it and Claude can log workouts and build routines, but Hevy has no undo, so anything it changes in a saved workout replaces what was there. Using ChatGPT, Claude Code or Cursor? Open the invite link first, then add the same address the way that app adds MCP servers.
 
 Leaving: ask Claude to **"disconnect from Hevy"** — that revokes the connection and deletes the stored key. Or rotate your key at Hevy, which instantly makes the stored copy useless (it is cleared the next time anything tries to use it). See [PRIVACY.md](./PRIVACY.md) for what is stored and for how long.
 
@@ -24,7 +30,9 @@ git clone https://github.com/khglynn/hevy-mcp && cd hevy-mcp
 npm install
 npx wrangler kv namespace create OAUTH_KV     # paste the id into wrangler.jsonc
 # edit wrangler.jsonc: your KV id; change or delete the custom-domain "routes"
-# line; delete the "migrations" block (it is this deployment's history, not yours)
+# line; delete the "migrations" block (it is this deployment's history, not
+# yours); give the three rate-limit "namespace_id"s fresh integers — a reused id
+# shares its counter with another Worker in your account
 INVITE=$(openssl rand -hex 16); echo "invite code: $INVITE"
 printf '%s' "$INVITE" | npx wrangler secret put MCP_INVITE_CODE   # required
 OWNER=$(openssl rand -hex 16); echo "owner token: $OWNER"
@@ -54,7 +62,7 @@ npm run type-check
 INVITE=<value from .dev.vars> OWNER_TOKEN=<value> HEVY_API_KEY=<your key> npm run test:smoke
 ```
 
-The smoke test runs 47 checks against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 28 unauthenticated checks, which is what CI runs on every push.
+The smoke test runs 48 checks (it prints the count it ran) against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 29 unauthenticated checks, which is what CI runs on every push.
 
 ## How it works
 
@@ -78,14 +86,15 @@ Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶
 |---|---|---|
 | account | `whoami` | Which Hevy account, which client, read or write |
 | account | `disconnect` | Revokes every grant for this person and forgets the key they connected with |
+| write | `create_body_measurement` | Weights in kg, circumferences in centimetres (field names carry the unit) |
 | read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_exercise_history`, `get_body_measurements` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
 | read | `search_exercise_templates` | Template list cached per user for 6 hours |
-| write | `create_workout`, `update_workout`, `create_routine`, `create_routine_folder`, `create_exercise_template`, `create_body_measurement` | `update_workout` is a full overwrite; Hevy has no delete or undo |
+| write | `create_workout`, `update_workout`, `create_routine`, `create_routine_folder`, `create_exercise_template` | `update_workout` is a full overwrite; Hevy has no delete or undo |
 
 ## Clients
 
 - **Claude** (web, desktop, Claude Code, mobile once added elsewhere): all plans, Free limited to one custom connector; Team and Enterprise need an Owner to add it.
-- **ChatGPT:** works, but needs Developer Mode, and write tools only run on Business, Enterprise and Edu plans (Plus and Pro are read-only). Not a server limit.
+- **ChatGPT (web):** Business, Enterprise and Edu support full MCP including writes; Pro gets read-only MCP in Developer Mode; Plus is not currently supported for custom MCP servers. Platform limits, not this server's.
 - **Cursor:** works via its own OAuth callback.
 
 ## Limits and honesty

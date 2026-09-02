@@ -18,9 +18,12 @@ const INVITE = process.env.INVITE ?? "";
 const HEVY_API_KEY = process.env.HEVY_API_KEY ?? "";
 
 let failures = 0;
+let passes = 0;
 function check(name, cond, detail = "") {
-  if (cond) console.log(`  ok   ${name}`);
-  else {
+  if (cond) {
+    passes++;
+    console.log(`  ok   ${name}`);
+  } else {
     failures++;
     console.log(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
   }
@@ -39,6 +42,7 @@ async function main() {
   check("AS metadata: S256 only", JSON.stringify(as.code_challenge_methods_supported) === '["S256"]', JSON.stringify(as.code_challenge_methods_supported));
   check("AS metadata: registration endpoint", typeof as.registration_endpoint === "string");
   check("AS metadata: CIMD advertised", as.client_id_metadata_document_supported === true);
+  check("AS metadata: offline_access advertised (ChatGPT keys refresh on it)", Array.isArray(as.scopes_supported) && as.scopes_supported.includes("offline_access"), JSON.stringify(as.scopes_supported));
   check("AS metadata: logo_uri injected", typeof as.logo_uri === "string" && as.logo_uri.endsWith("/favicon.png"));
   const prm = await fetch(`${BASE}/.well-known/oauth-protected-resource/mcp`);
   check("PRM (path-specific) 200", prm.status === 200);
@@ -279,7 +283,8 @@ async function main() {
 }
 
 function finish() {
-  console.log(failures === 0 ? "\nall checks passed" : `\n${failures} check(s) FAILED`);
+  console.log(`\n${passes + failures} checks run`);
+  console.log(failures === 0 ? "all checks passed" : `${failures} check(s) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 }
 

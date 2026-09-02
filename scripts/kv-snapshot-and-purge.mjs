@@ -17,7 +17,7 @@
  * OAuth once, cleanly, at the moment of cutover.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
 const token = process.env.CLOUDFLARE_API_TOKEN;
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -38,7 +38,7 @@ async function listKeys() {
   const keys = [];
   let cursor = "";
   do {
-    const r = await fetch(`${api}/keys?limit=1000${cursor ? `&cursor=${cursor}` : ""}`, { headers });
+    const r = await fetch(`${api}/keys?limit=1000${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, { headers });
     const j = await r.json();
     if (!j.success) throw new Error(JSON.stringify(j.errors));
     keys.push(...j.result.map((k) => k.name));
@@ -51,12 +51,18 @@ const keys = await listKeys();
 const snapshot = {};
 for (const k of keys) {
   const r = await fetch(`${api}/values/${encodeURIComponent(k)}`, { headers });
+  if (!r.ok) throw new Error(`value read failed for ${k}: HTTP ${r.status} — not purging on a partial snapshot`);
   snapshot[k] = await r.text();
 }
+if (Object.keys(snapshot).length !== keys.length) throw new Error("snapshot is missing keys — not purging");
 mkdirSync(new URL("../backups/", import.meta.url), { recursive: true });
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const out = new URL(`../backups/kv-${stamp}.json`, import.meta.url);
-writeFileSync(out, JSON.stringify({ namespace: ns, takenAt: stamp, keys: snapshot }, null, 2));
+const tmp = new URL(`../backups/kv-${stamp}.json.tmp`, import.meta.url);
+writeFileSync(tmp, JSON.stringify({ namespace: ns, takenAt: stamp, keys: snapshot }, null, 2), { mode: 0o600 });
+JSON.parse(readFileSync(tmp, "utf8")); // it must read back before anything is deleted
+renameSync(tmp, out);
+console.log("Delete this snapshot once the cutover is verified: it holds encrypted grants and member names beyond the retention the privacy page promises.");
 const counts = keys.reduce((m, k) => ((m[k.split(":")[0]] = (m[k.split(":")[0]] ?? 0) + 1), m), {});
 console.log(`snapshot: ${keys.length} keys → ${out.pathname}`);
 console.log("by prefix:", counts);

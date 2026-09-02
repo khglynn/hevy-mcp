@@ -18,6 +18,6 @@ The person operating the deployment could technically read a key while a request
 
 ## Leaving
 
-- Ask Claude to **"disconnect from Hevy"** — this revokes every connection, deletes the stored key, and forgets the key you connected with.
+- Ask your assistant to **"disconnect from Hevy"** — this revokes every connection, deletes the stored key, and forgets the key you connected with.
 - Rotate your key at [hevy.com/settings?developer](https://hevy.com/settings?developer) — that instantly makes the stored copy useless to this server and anything else holding the old key; it is cleared the next time anything tries to use it.
 - Removing the connector in Claude alone does not delete the stored key; use one of the two steps above.

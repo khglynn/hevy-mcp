@@ -19,7 +19,7 @@ import { type ClientLabel, describeClient, identifyClient } from "./clients";
 import { faviconPngBytes } from "./favicon";
 import { HevyError, validateHevyKey } from "./hevy";
 import { PROPS_VERSION } from "./mcp";
-import { type AppEnv, UUID_RE, clientIp, constantTimeEqual, cookie, deriveUserId, getCookie, log, memberKeyFor, operatorName, randomToken, revokeAllGrants, sha256Hex } from "./util";
+import { type AppEnv, UUID_RE, clientIp, constantTimeEqual, cookie, deriveUserId, getCookie, keyFingerprint, log, memberKeyFor, operatorName, randomToken, revokeAllGrants, sha256Hex } from "./util";
 
 type Vars = { nonce: string };
 const app = new Hono<{ Bindings: AppEnv; Variables: Vars }>();
@@ -120,10 +120,10 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
       <p class="muted" style="margin-top:.6rem">Log in, open <b>Developer</b>, create a key. <b>Copy it into your notes or password manager first</b> — Hevy only shows it once. No Developer section? That account isn't on Pro.</p>
 
       <h2>Then, in Claude</h2>
-      <p>Settings → Connectors → Add custom connector, and paste this:</p>
+      <p>Open Claude on the web or desktop and go to <b>Customize → Connectors</b>. On a personal account, choose <b>+ → Add custom connector</b> and paste this:</p>
       <div class="url"><code id="mcpurl">${origin}/mcp</code><button class="copy" id="copy" type="button">Copy</button></div>
-      <p class="muted" style="margin-top:.6rem">Leave Client ID and Secret blank. Use your <b>personal</b> Claude account — work and school accounts usually block custom connectors. Any personal plan works, including Free (Free allows one custom connector). Add it on the web or desktop app; once added it shows up on your phone too.</p>
-      <p>A page opens asking for your key. Paste it, choose whether Claude may add and edit workouts, and you're connected.</p>
+      <p class="muted" style="margin-top:.6rem">Leave Client ID and Client Secret blank. Any personal plan works, including Free (Free allows one custom connector). On a Team or Enterprise account an Owner has to add the address under Organization settings → Connectors first; then you click Connect. Add it on the web or desktop app; once added it shows up on your phone too.</p>
+      <p>A page opens asking for your key. Paste it, choose whether your assistant may add and edit workouts, and you're connected. Using ChatGPT, Claude Code or Cursor instead? Same address, added the way that app adds MCP servers.</p>
 
       <h2>What happens to your key</h2>
       <p class="muted">This runs on a server operated by ${operator}, on Cloudflare. Your key is stored encrypted and used only to talk to Hevy for you. ${operator} could technically read it. To cut it off instantly, rotate the key at Hevy — or ask Claude to "disconnect from Hevy". <a href="/privacy">What's stored and for how long →</a></p>
@@ -174,7 +174,7 @@ app.get("/privacy", (c) => {
         <p>${operator} operates this server on a personal Cloudflare account and could technically read a key while a request is in flight. Nobody else can. There is no support promise; the Hevy API itself is unofficial and Hevy says it may change or withdraw it.</p>
         <h2>Leaving</h2>
         <ul>
-          <li>Ask Claude to <b>"disconnect from Hevy"</b> — this revokes every connection, deletes the stored key, and forgets the key you connected with.</li>
+          <li>Ask your assistant to <b>"disconnect from Hevy"</b> — this revokes every connection, deletes the stored key, and forgets the key you connected with.</li>
           <li>Rotate your key at <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener noreferrer">hevy.com/settings?developer</a> — that instantly makes the stored copy useless to this server and anything else holding the old key; it is cleared the next time anything tries to use it.</li>
           <li>Removing the connector in Claude alone does not delete the stored key; use one of the two steps above.</li>
         </ul>
@@ -216,10 +216,10 @@ function connectPage(o: ConnectPageOpts) {
               <p class="muted" style="margin-top:.4rem">From the invite link you were sent. Opening that link in this browser fills this in for you. Connected before with this key? Leave it blank.</p>`
           : ""}
         <label class="check"><input type="checkbox" name="can_write" ${o.canWrite ? "checked" : ""} />
-          <span>Let Claude add and edit workouts, routines and measurements.<br /><span class="muted">Leave off for read-only — Claude can look, not touch. Heads up: Hevy has no undo. Edits Claude makes to a saved workout replace what was there.</span></span></label>
+          <span>Let ${o.client} add and edit workouts, routines and measurements.<br /><span class="muted">Leave off for read-only — it can look, not touch. Heads up: Hevy has no undo. Edits it makes to a saved workout replace what was there.</span></span></label>
         <button type="submit" class="btn" id="submit">Connect</button>
       </form>
-      <p class="muted" style="margin-top:1rem">Your key is stored encrypted on a server run by ${o.operator} and used only to call Hevy on your behalf. ${o.operator} could technically read it. Leave any time by asking Claude to "disconnect from Hevy" or rotating the key at Hevy. <a href="/privacy">Details →</a></p>
+      <p class="muted" style="margin-top:1rem">Your key is stored encrypted on a server run by ${o.operator} and used only to call Hevy on your behalf. ${o.operator} could technically read it. Leave any time by asking your assistant to "disconnect from Hevy" or rotating the key at Hevy. <a href="/privacy">Details →</a></p>
       <script nonce="${o.nonce}">
         (function () {
           var i = document.getElementById("hevy_key"), t = document.getElementById("toggle"), f = document.getElementById("f"), s = document.getElementById("submit");
@@ -283,11 +283,11 @@ async function bumpFails(env: AppEnv, key: string): Promise<void> {
   await env.OAUTH_KV.put(key, String(n), { expirationTtl: 60 * 60 });
 }
 
-function successPage(name: string, redirectTo: string, canWrite: boolean) {
+function successPage(name: string, redirectTo: string, canWrite: boolean, client: string) {
   return layout(
     html`<meta http-equiv="refresh" content="2;url=${redirectTo}" />
       <h1>Connected as ${name || "your Hevy account"}</h1>
-      <p>${canWrite ? "Claude can read your workouts and add or edit them." : "Claude can read your workouts. Reconnect with the box ticked if you want it to add or edit later."}</p>
+      <p>${canWrite ? `${client} can read your workouts and add or edit them.` : `${client} can read your workouts. Reconnect with the box ticked if you want it to add or edit later.`}</p>
       <p>Sending you back… <a href="${redirectTo}">continue</a> if nothing happens.</p>
       <p class="muted">Not you? <a href="/start">Start over</a>.</p>`,
     "Connected",
@@ -358,7 +358,7 @@ app.post("/approve", async (c) => {
   const inviteOk = typedOk || (cookieInvite.length > 0 && constantTimeEqual(cookieInvite, c.env.MCP_INVITE_CODE));
   if (typedOk) c.header("Set-Cookie", cookie(INVITE_COOKIE, typedInvite, 365 * DAY));
 
-  const again = (error: string, status: 400 | 401 | 403) =>
+  const again = (error: string, status: 400 | 401 | 403 | 503) =>
     c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: !inviteOk, operator: operatorName(c.env), nonce: c.get("nonce"), error, canWrite }), status);
 
   if (!UUID_RE.test(key)) {
@@ -387,7 +387,8 @@ app.post("/approve", async (c) => {
     }
   }
 
-  // Ask Hevy who owns the key. A 401 means the key is bad, full stop.
+  // Ask Hevy who owns the key. A 401 means the key is bad, full stop; anything
+  // else is Hevy's problem or ours and must not read as "your key is wrong".
   let user;
   try {
     user = await validateHevyKey(key);
@@ -395,7 +396,8 @@ app.post("/approve", async (c) => {
     const status = e instanceof HevyError ? e.status : 0;
     if (status === 401) await bumpFails(c.env, failKey);
     log("approve.key_rejected", { client, status });
-    return again(describeHevyFailure(e), 401);
+    const credentialProblem = status === 401 || status === 403;
+    return again(describeHevyFailure(e), credentialProblem ? 401 : 503);
   }
 
   const userId = await deriveUserId(user.id);
@@ -403,12 +405,13 @@ app.post("/approve", async (c) => {
   const existing = await c.env.OAUTH_KV.get<{ firstConnectedAt?: string }>(memberRecordKey, "json");
 
   const now = new Date().toISOString();
+  const fingerprint = await keyFingerprint(key);
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
     request: req,
     userId,
-    metadata: { name: user.name, client, canWrite, connectedAt: now },
+    metadata: { name: user.name, client, canWrite, connectedAt: now, keyFingerprint: fingerprint },
     scope: req.scope,
-    props: { v: PROPS_VERSION, hevyApiKey: key, hevyUserId: userId, name: user.name, canWrite, client },
+    props: { v: PROPS_VERSION, hevyApiKey: key, keyFingerprint: fingerprint, hevyUserId: userId, name: user.name, canWrite, client },
   });
   await Promise.all([
     c.env.OAUTH_KV.put(
@@ -419,7 +422,7 @@ app.post("/approve", async (c) => {
     c.env.OAUTH_KV.put(memberKey, userId, { expirationTtl: 365 * DAY }),
   ]);
   log("approve.connected", { userId, client, canWrite, returning: !!existing });
-  return c.html(successPage(user.name, redirectTo, canWrite));
+  return c.html(successPage(user.name, redirectTo, canWrite, client));
 });
 
 // ---------- /admin — owner only ----------

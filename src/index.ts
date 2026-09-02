@@ -14,7 +14,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { identifyClient } from "./clients";
 import pages from "./pages";
 import { buildServer, isHevyProps } from "./mcp";
-import { type AppEnv, log } from "./util";
+import { type AppEnv, clientIp, log } from "./util";
 
 const DAY = 24 * 60 * 60;
 
@@ -64,6 +64,9 @@ const provider = new OAuthProvider<AppEnv>({
   // BOTH this option AND the global_fetch_strictly_public compat flag in
   // wrangler.jsonc. Clients that don't use CIMD fall back to DCR.
   clientIdMetadataDocumentEnabled: true,
+  // Advertise offline_access so clients that key refresh on it (ChatGPT) keep
+  // refreshing past the 7-day access token instead of asking to reconnect.
+  scopesSupported: ["offline_access"],
   // S256 only. Claude and ChatGPT always send S256; `plain` protects nothing.
   allowPlainPKCE: false,
   // A token here is also the decryption key for someone's Hevy credential, so
@@ -118,8 +121,23 @@ function withBaseHeaders(res: Response, url: URL): Response {
 
 export default {
   async fetch(request: Request, env: AppEnv, ctx: ExecutionContext): Promise<Response> {
-    const res = await provider.fetch(request, env, ctx);
     const url = new URL(request.url);
+    // Dynamic client registration is unauthenticated and writes a year-long KV
+    // record per call, so it gets its own brake (per source, best effort).
+    if (request.method === "POST" && url.pathname === "/register" && env.REGISTER_RL) {
+      const rl = await env.REGISTER_RL.limit({ key: clientIp(request) }).catch(() => ({ success: true }));
+      if (!rl.success) {
+        log("oauth.registration_throttled", {});
+        return withBaseHeaders(
+          new Response(JSON.stringify({ error: "temporarily_unavailable", error_description: "Too many registrations; try again in a minute." }), {
+            status: 429,
+            headers: { "content-type": "application/json", "retry-after": "60" },
+          }),
+          url,
+        );
+      }
+    }
+    const res = await provider.fetch(request, env, ctx);
     if (request.method === "GET" && isOAuthMetadataPath(url.pathname) && res.ok) {
       try {
         const meta = (await res.clone().json()) as Record<string, unknown>;

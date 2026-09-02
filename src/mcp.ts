@@ -19,12 +19,14 @@ import { FAVICON_DATA_URI } from "./favicon";
 import { HevyClient, HevyError, validateHevyKey } from "./hevy";
 import { type AppEnv, log, memberKeyFor, operatorName, revokeAllGrants } from "./util";
 
-export const PROPS_VERSION = 2;
+export const PROPS_VERSION = 3;
 
-/** What a v2 grant carries. Anything else is treated as unauthenticated. */
+/** What a grant carries. Anything else is treated as unauthenticated. */
 export interface HevyProps {
   v: number;
   hevyApiKey: string;
+  /** Non-secret fingerprint of the key; also in grant metadata so a dead key revokes only its own grants. */
+  keyFingerprint: string;
   hevyUserId: string;
   name: string;
   canWrite: boolean;
@@ -38,6 +40,7 @@ export function isHevyProps(p: unknown): p is HevyProps {
     o.v === PROPS_VERSION &&
     typeof o.hevyApiKey === "string" &&
     o.hevyApiKey.length > 0 &&
+    typeof o.keyFingerprint === "string" &&
     typeof o.hevyUserId === "string" &&
     o.hevyUserId.length > 0 &&
     typeof o.canWrite === "boolean"
@@ -75,7 +78,8 @@ function errorResult(text: string) {
  * re-run OAuth. Without that, a rotated key means a connector that looks
  * healthy and errors forever.
  */
-async function fail(e: unknown, ctx: ToolContext) {
+async function fail(e: unknown, ctx: ToolContext, isWrite: boolean) {
+  const operator = operatorName(ctx.env);
   if (e instanceof HevyError) {
     if (e.status === 401) {
       // Confirm before tearing anything down: revoke only if the key itself is
@@ -93,7 +97,8 @@ async function fail(e: unknown, ctx: ToolContext) {
       }
       let revoked = 0;
       try {
-        revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
+        // Only the grants carrying THIS key: a client that already reconnected with a new key keeps working.
+        revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId, ctx.props.keyFingerprint);
         await ctx.env.OAUTH_KV.delete(await memberKeyFor(ctx.props.hevyApiKey));
       } catch (revokeErr) {
         log("hevy.revoke_failed", { userId: ctx.props.hevyUserId, error: String(revokeErr) });
@@ -114,10 +119,35 @@ async function fail(e: unknown, ctx: ToolContext) {
       log("hevy.rate_limited", { userId: ctx.props.hevyUserId });
       return errorResult("Hevy is rate-limiting requests right now. Nothing is wrong with your key — wait a minute and try again.");
     }
-    return errorResult(`Error: ${e.message}`);
+    if (e.status >= 500 || e.status === 0) {
+      log("hevy.upstream_failure", { userId: ctx.props.hevyUserId, status: e.status, write: isWrite });
+      return errorResult(
+        isWrite
+          ? "Hevy didn't confirm whether that change saved. Check the Hevy app before retrying so you don't create a duplicate."
+          : "Hevy didn't answer this time. Try again in a minute.",
+      );
+    }
+    // A 4xx with a reason: show only Hevy's own message, never the raw body.
+    let reason = "";
+    try {
+      const parsed = JSON.parse(e.body) as { message?: unknown; error?: unknown };
+      reason = typeof parsed.message === "string" ? parsed.message : typeof parsed.error === "string" ? parsed.error : "";
+    } catch {
+      reason = e.body.length < 160 ? e.body : "";
+    }
+    return errorResult(`Hevy rejected that request (${e.status})${reason ? `: ${reason}` : ""}. Check the values and try again.`);
   }
   const msg = e instanceof Error ? e.message : String(e);
-  return errorResult(`Error: ${msg}`);
+  if (/abort|timeout|network|fetch failed/i.test(msg)) {
+    log("hevy.network_failure", { userId: ctx.props.hevyUserId, write: isWrite });
+    return errorResult(
+      isWrite
+        ? "Hevy didn't confirm whether that change saved. Check the Hevy app before retrying so you don't create a duplicate."
+        : "Hevy didn't answer this time. Try again in a minute.",
+    );
+  }
+  log("tool.unexpected_error", { userId: ctx.props.hevyUserId, error: msg });
+  return errorResult(`The connector hit an unexpected problem. Try once more; if it repeats, tell ${operator}.`);
 }
 
 /** "get_workout_count" -> "Get workout count" for a readable display title. */
@@ -150,7 +180,7 @@ function reg<S extends z.ZodRawShape>(
       });
       return ok(await handler(args, hevy));
     } catch (e) {
-      return await fail(e, ctx);
+      return await fail(e, ctx, !readOnly);
     }
   };
   // Cast only at this boundary: the generic wrapper above erases the exact
@@ -456,32 +486,44 @@ export function buildServer(ctx: ToolContext): McpServer {
     (e, hevy) => hevy.createExerciseTemplate(e),
   );
 
+  const cm = (what: string) => z.number().nullable().optional().describe(`${what}, in centimetres.`);
   reg(
     server,
     ctx,
     "create_body_measurement",
-    "Record a body measurement for a date (YYYY-MM-DD). One entry per date — fails with 409 if the date already exists.",
+    "Record a body measurement for a date (YYYY-MM-DD). Weights in kg, circumferences in centimetres. One entry per date — fails with 409 if the date already exists.",
     {
       date: z.string().describe("YYYY-MM-DD"),
-      weight_kg: z.number().nullable().optional(),
-      lean_mass_kg: z.number().nullable().optional(),
-      fat_percent: z.number().nullable().optional(),
-      neck_cm: z.number().nullable().optional(),
-      shoulder_cm: z.number().nullable().optional(),
-      chest_cm: z.number().nullable().optional(),
-      left_bicep_cm: z.number().nullable().optional(),
-      right_bicep_cm: z.number().nullable().optional(),
-      left_forearm_cm: z.number().nullable().optional(),
-      right_forearm_cm: z.number().nullable().optional(),
-      abdomen: z.number().nullable().optional(),
-      waist: z.number().nullable().optional(),
-      hips: z.number().nullable().optional(),
-      left_thigh: z.number().nullable().optional(),
-      right_thigh: z.number().nullable().optional(),
-      left_calf: z.number().nullable().optional(),
-      right_calf: z.number().nullable().optional(),
+      weight_kg: z.number().nullable().optional().describe("Body weight, in kilograms."),
+      lean_mass_kg: z.number().nullable().optional().describe("Lean mass, in kilograms."),
+      fat_percent: z.number().nullable().optional().describe("Body fat, percent."),
+      neck_cm: cm("Neck"),
+      shoulder_cm: cm("Shoulders"),
+      chest_cm: cm("Chest"),
+      left_bicep_cm: cm("Left bicep"),
+      right_bicep_cm: cm("Right bicep"),
+      left_forearm_cm: cm("Left forearm"),
+      right_forearm_cm: cm("Right forearm"),
+      abdomen_cm: cm("Abdomen"),
+      waist_cm: cm("Waist"),
+      hips_cm: cm("Hips"),
+      left_thigh_cm: cm("Left thigh"),
+      right_thigh_cm: cm("Right thigh"),
+      left_calf_cm: cm("Left calf"),
+      right_calf_cm: cm("Right calf"),
     },
-    (m, hevy) => hevy.createBodyMeasurement(m),
+    ({ abdomen_cm, waist_cm, hips_cm, left_thigh_cm, right_thigh_cm, left_calf_cm, right_calf_cm, ...rest }, hevy) =>
+      // Hevy's wire format leaves these seven unsuffixed; the model-facing names carry the unit.
+      hevy.createBodyMeasurement({
+        ...rest,
+        abdomen: abdomen_cm,
+        waist: waist_cm,
+        hips: hips_cm,
+        left_thigh: left_thigh_cm,
+        right_thigh: right_thigh_cm,
+        left_calf: left_calf_cm,
+        right_calf: right_calf_cm,
+      }),
   );
 
   return server;

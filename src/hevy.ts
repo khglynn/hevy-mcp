@@ -33,10 +33,15 @@ export interface HevyUser {
  * retries: a 401 here means "Hevy rejected the key", and that is the answer.
  */
 export async function validateHevyKey(apiKey: string): Promise<HevyUser> {
-  const res = await fetch(`${BASE}/user/info`, { headers: { "api-key": apiKey } });
+  const res = await fetch(`${BASE}/user/info`, { headers: { "api-key": apiKey }, signal: AbortSignal.timeout(10_000) });
   const text = await res.text();
   if (!res.ok) throw new HevyError(res.status, text);
-  const data = (JSON.parse(text) as { data?: Partial<HevyUser> }).data;
+  let data: Partial<HevyUser> | undefined;
+  try {
+    data = (JSON.parse(text) as { data?: Partial<HevyUser> }).data;
+  } catch {
+    throw new HevyError(502, "user info was not JSON");
+  }
   if (!data || typeof data.id !== "string" || !data.id) throw new HevyError(502, "user info had no id");
   return {
     id: data.id,

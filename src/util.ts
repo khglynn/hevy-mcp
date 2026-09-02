@@ -65,7 +65,12 @@ export function getCookie(request: Request, name: string): string | null {
   if (!header) return null;
   for (const part of header.split(";")) {
     const [k, ...rest] = part.trim().split("=");
-    if (k === name) return decodeURIComponent(rest.join("="));
+    if (k !== name) continue;
+    try {
+      return decodeURIComponent(rest.join("="));
+    } catch {
+      return null; // a malformed cookie is treated as absent, never as a crash
+    }
   }
   return null;
 }
@@ -79,7 +84,7 @@ export function randomToken(): string {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 }
 
-/** The operator's name for user-facing copy. Set OPERATOR_NAME in wrangler.jsonc `vars`. */
+/** The operator's name for user-facing copy. OPERATOR_NAME is set as a secret (survives deploys, stays out of the repo). */
 export function operatorName(env: { OPERATOR_NAME?: string }): string {
   const n = (env.OPERATOR_NAME ?? "").trim();
   return n || "the person who runs this server";
@@ -93,17 +98,28 @@ export async function memberKeyFor(apiKey: string): Promise<string> {
   return "memberkey:" + (await sha256Hex("hevy-key:" + apiKey.toLowerCase())).slice(0, 40);
 }
 
+/** Short non-secret fingerprint of a key, kept in grant metadata so a dead key revokes only the grants that carry it. */
+export async function keyFingerprint(apiKey: string): Promise<string> {
+  return (await sha256Hex("hevy-fp:" + apiKey.toLowerCase())).slice(0, 16);
+}
+
 export function clientIp(request: Request): string {
   return request.headers.get("cf-connecting-ip") ?? "unknown";
 }
 
-/** Revoke every grant a user holds. Used when their Hevy key dies and by the disconnect tool. */
-export async function revokeAllGrants(env: AppEnv, userId: string): Promise<number> {
+/**
+ * Revoke a user's grants. With `onlyFingerprint`, only grants whose metadata
+ * carries that key fingerprint go — so a retired key on one client never
+ * takes down a healthy client that already reconnected with the new key.
+ */
+export async function revokeAllGrants(env: AppEnv, userId: string, onlyFingerprint?: string): Promise<number> {
   let revoked = 0;
   let cursor: string | undefined;
   do {
     const page = await env.OAUTH_PROVIDER.listUserGrants(userId, { cursor });
     for (const grant of page.items) {
+      const fp = (grant.metadata as { keyFingerprint?: string } | undefined)?.keyFingerprint;
+      if (onlyFingerprint && fp && fp !== onlyFingerprint) continue;
       await env.OAUTH_PROVIDER.revokeGrant(grant.id, userId);
       revoked++;
     }

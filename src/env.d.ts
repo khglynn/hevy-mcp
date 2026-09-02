@@ -8,6 +8,6 @@ interface Env {
   MCP_INVITE_CODE?: string;
   /** Optional. Unlocks /admin; /admin is a 404 when unset. */
   OWNER_TOKEN?: string;
-  /** Who runs this deployment, as named on the connect and privacy pages (a `vars` entry, not a secret). */
+  /** Who runs this deployment, as named on the connect and privacy pages. Set as a secret so it survives deploys and stays out of the repo. */
   OPERATOR_NAME?: string;
 }
