@@ -414,6 +414,7 @@ app.post("/approve", async (c) => {
     c.env.OAUTH_KV.put(
       memberRecordKey,
       JSON.stringify({ name: user.name, firstConnectedAt: existing?.firstConnectedAt ?? now, lastConnectedAt: now }),
+      { expirationTtl: 365 * DAY }, // the privacy page promises a year; each connect restarts it
     ),
     c.env.OAUTH_KV.put(memberKey, userId, { expirationTtl: 365 * DAY }),
   ]);
