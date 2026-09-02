@@ -246,7 +246,13 @@ async function main() {
 
   // Re-authorizing the same client replaces its previous grant
   // (revokeExistingGrants, the library default) — so the first token is dead now.
-  const stale = await rpc("tools/list", {}, 6);
+  // Production KV is eventually consistent, so a just-revoked token can answer
+  // 200 for up to a minute at another edge; poll before judging.
+  let stale = await rpc("tools/list", {}, 6);
+  for (let i = 0; i < 8 && stale.status !== 401; i++) {
+    await new Promise((r) => setTimeout(r, 5000));
+    stale = await rpc("tools/list", {}, 6);
+  }
   check("re-authorizing the same client revoked the earlier grant (401)", stale.status === 401, `got ${stale.status}`);
 
   // --- disconnect revokes; the same token must then be refused ---
