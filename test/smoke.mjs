@@ -68,8 +68,10 @@ async function main() {
   }
   const privacy = await fetch(`${BASE}/privacy`);
   check("/privacy 200", privacy.status === 200);
-  const admin = await fetch(`${BASE}/admin`);
-  check("/admin without owner cookie → 404", admin.status === 404);
+  const admin = await fetch(`${BASE}/admin`, { redirect: "manual" });
+  check("/admin without a session → redirected to sign-in", admin.status === 302 && (admin.headers.get("location") ?? "").endsWith("/admin/login"));
+  const adminQuery = await fetch(`${BASE}/admin?token=${encodeURIComponent(process.env.OWNER_TOKEN ?? "x")}`, { redirect: "manual" });
+  check("/admin?token= is not a sign-in (no cookie)", !(adminQuery.headers.get("set-cookie") ?? "").includes("hevy_owner="));
 
   // --- client allowlist at /register ---
   const evil = await fetch(`${BASE}/register`, {
@@ -137,12 +139,15 @@ async function main() {
 
   // --- admin (owner token) ---
   if (process.env.OWNER_TOKEN) {
-    const login = await fetch(`${BASE}/admin?token=${encodeURIComponent(process.env.OWNER_TOKEN)}`, { redirect: "manual" });
-    const ownerCookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-    check("/admin?token= sets owner cookie and redirects", login.status === 302 && ownerCookie.startsWith("hevy_owner="));
+    const bad = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...fakeIp }, body: form({ token: "wrong" }), redirect: "manual" });
+    check("POST /admin/login with a wrong token → 401, no cookie", bad.status === 401 && !bad.headers.get("set-cookie"));
+    const login = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...fakeIp }, body: form({ token: process.env.OWNER_TOKEN }), redirect: "manual" });
+    const setCookie = login.headers.get("set-cookie") ?? "";
+    const ownerCookie = setCookie.split(";")[0];
+    check("POST /admin/login sets an opaque session cookie scoped to /admin", login.status === 302 && ownerCookie.startsWith("hevy_owner=") && !ownerCookie.includes(process.env.OWNER_TOKEN) && /Path=\/admin/.test(setCookie));
     const adminPage = await fetch(`${BASE}/admin`, { headers: { cookie: ownerCookie } });
     const adminHtml = await adminPage.text();
-    check("/admin renders for the owner", adminPage.status === 200 && adminHtml.includes("Connected accounts"));
+    check("/admin renders for the owner", adminPage.status === 200 && adminHtml.includes("Connected accounts") && adminHtml.includes("Remove person"));
   } else {
     console.log("  skip admin checks (set OWNER_TOKEN)");
   }
@@ -204,6 +209,13 @@ async function main() {
   const count = await rpc("tools/call", { name: "get_workout_count", arguments: {} }, 4);
   check("get_workout_count reaches Hevy", count.status === 200 && (count.body?.result?.content?.[0]?.text ?? "").includes("workout_count"), count.raw);
 
+  const originCheck = await fetch(`${BASE}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}`, origin: "https://claude.ai" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 40, method: "tools/list", params: {} }),
+  });
+  check("/mcp accepts a request carrying Origin: https://claude.ai (not 403)", originCheck.status === 200, `got ${originCheck.status}`);
+
   const refresh = await fetch(`${BASE}/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -211,6 +223,12 @@ async function main() {
   });
   const refreshBody = await refresh.json();
   check("refresh_token grant issues a new access token", refresh.status === 200 && typeof refreshBody.access_token === "string" && refreshBody.access_token !== token, JSON.stringify(refreshBody).slice(0, 200));
+  const refreshed = await fetch(`${BASE}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${refreshBody.access_token}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 41, method: "tools/list", params: {} }),
+  });
+  check("refreshed token still carries the key (tools/list 200 with whoami)", refreshed.status === 200 && (await refreshed.text()).includes('"whoami"'));
 
   // --- real key: write grant ---
   const v2 = b64url(randomBytes(32));

@@ -1,5 +1,5 @@
 /**
- * Every page a person sees: /start (the link Kevin texts), /authorize and
+ * Every page a person sees: /start (the link the operator sends), /authorize and
  * /approve (the OAuth consent step where they paste their own Hevy key),
  * /privacy, and /admin (owner only). workers-oauth-provider owns the actual
  * OAuth endpoints (/token, /register); this app only renders the login step
@@ -19,23 +19,24 @@ import { type ClientLabel, describeClient, identifyClient } from "./clients";
 import { faviconPngBytes } from "./favicon";
 import { HevyError, validateHevyKey } from "./hevy";
 import { PROPS_VERSION } from "./mcp";
-import { type AppEnv, UUID_RE, clientIp, constantTimeEqual, cookie, deriveUserId, getCookie, log, memberKeyFor, operatorName } from "./util";
+import { type AppEnv, UUID_RE, clientIp, constantTimeEqual, cookie, deriveUserId, getCookie, log, memberKeyFor, operatorName, randomToken, revokeAllGrants, sha256Hex } from "./util";
 
-const app = new Hono<{ Bindings: AppEnv }>();
+type Vars = { nonce: string };
+const app = new Hono<{ Bindings: AppEnv; Variables: Vars }>();
 
 const INVITE_COOKIE = "hevy_invite";
 const OWNER_COOKIE = "hevy_owner";
 const DAY = 24 * 60 * 60;
 const MAX_FAILS_PER_HOUR = 20;
 
-// ---------- security headers on everything ----------
+// ---------- security headers on every page (nosniff/referrer/HSTS are added for ALL routes in index.ts) ----------
 app.use("*", async (c, next) => {
+  const nonce = randomToken();
+  c.set("nonce", nonce);
   await next();
-  c.header("X-Content-Type-Options", "nosniff");
-  c.header("Referrer-Policy", "no-referrer");
   c.header(
     "Content-Security-Policy",
-    "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'",
+    `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`,
   );
   if (!c.req.path.startsWith("/favicon")) c.header("Cache-Control", "no-store");
 });
@@ -102,7 +103,7 @@ app.get("/favicon.ico", (c) =>
 );
 
 // ---------- /start — the link Kevin sends ----------
-function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string) {
+function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string, nonce: string) {
   return layout(
     html`<h1>Connect Hevy to Claude</h1>
       <p>Ask Claude about your actual training — what you lifted last week, what to do next — and log sessions without typing them twice.</p>
@@ -126,7 +127,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
 
       <h2>What happens to your key</h2>
       <p class="muted">This runs on a server operated by ${operator}, on Cloudflare. Your key is stored encrypted and used only to talk to Hevy for you. ${operator} could technically read it. To cut it off instantly, rotate the key at Hevy — or ask Claude to "disconnect from Hevy". <a href="/privacy">What's stored and for how long →</a></p>
-      <script>
+      <script nonce="${nonce}">
         (function () {
           var b = document.getElementById("copy"), u = document.getElementById("mcpurl");
           if (b && u) b.addEventListener("click", function () {
@@ -142,20 +143,20 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
 app.get("/", (c) => handleStart(c));
 app.get("/start", (c) => handleStart(c));
 
-function handleStart(c: Context<{ Bindings: AppEnv }>) {
+function handleStart(c: Context<{ Bindings: AppEnv; Variables: Vars }>) {
   const origin = new URL(c.req.url).origin;
   const invite = c.req.query("invite");
   let state: "ok" | "bad" | "none" = "none";
   if (invite) {
     if (c.env.MCP_INVITE_CODE && constantTimeEqual(invite, c.env.MCP_INVITE_CODE)) {
       state = "ok";
-      c.header("Set-Cookie", cookie(INVITE_COOKIE, invite, 30 * DAY));
+      c.header("Set-Cookie", cookie(INVITE_COOKIE, invite, 365 * DAY));
     } else {
       state = "bad";
       log("start.bad_invite", {});
     }
   }
-  return c.html(startPage(origin, state, operatorName(c.env)));
+  return c.html(startPage(origin, state, operatorName(c.env), c.get("nonce")));
 }
 
 // ---------- /privacy ----------
@@ -168,12 +169,12 @@ app.get("/privacy", (c) => {
         <p><b>Your Hevy display name, a hash of your Hevy user id, and a hash of your key</b>, so the operator can see who is connected and so you can reconnect later without a fresh invite, plus the date you connected and which app connected (Claude, ChatGPT, Claude Code, Cursor).</p>
         <p><b>Nothing from your workouts.</b> Requests go straight to Hevy and back; no workout, routine or measurement data is kept here. A copy of your exercise list — Hevy's built-ins plus any custom exercises you've made — is cached unencrypted for six hours per person to spare Hevy repeated lookups.</p>
         <h2>How long</h2>
-        <p>Access tokens last 7 days and are refreshed silently by your client. The connection itself lasts a year from the day you connect, however often you use it; after that Claude asks you to paste your Hevy key again, and the stored key is gone with the expired connection. Save your key somewhere you can find it. The record that your account has connected before (name, hashed id, hashed key, dates) stays until you disconnect.</p>
+        <p>Access tokens last 7 days and are refreshed silently by your client. The connection itself lasts a year from the day you connect, however often you use it; after that Claude asks you to paste your Hevy key again, and the stored key is gone with the expired connection. Save your key somewhere you can find it. The record that your account has connected before (name, hashed id, a hash of the key you used, dates) is kept for a year so you can reconnect without a fresh invite, or until you disconnect.</p>
         <h2>Who can read it</h2>
         <p>${operator} operates this server on a personal Cloudflare account and could technically read a key while a request is in flight. Nobody else can. There is no support promise; the Hevy API itself is unofficial and Hevy says it may change or withdraw it.</p>
         <h2>Leaving</h2>
         <ul>
-          <li>Ask Claude to <b>"disconnect from Hevy"</b> — this revokes every connection, deletes the stored key, and forgets that you ever connected.</li>
+          <li>Ask Claude to <b>"disconnect from Hevy"</b> — this revokes every connection, deletes the stored key, and forgets the key you connected with.</li>
           <li>Rotate your key at <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener noreferrer">hevy.com/settings?developer</a> — that instantly makes the stored copy useless to this server and anything else holding the old key; it is cleared the next time anything tries to use it.</li>
           <li>Removing the connector in Claude alone does not delete the stored key; use one of the two steps above.</li>
         </ul>
@@ -190,6 +191,7 @@ interface ConnectPageOpts {
   req: AuthRequest;
   showInvite: boolean;
   operator: string;
+  nonce: string;
   error?: string;
   canWrite?: boolean;
 }
@@ -218,7 +220,7 @@ function connectPage(o: ConnectPageOpts) {
         <button type="submit" class="btn" id="submit">Connect</button>
       </form>
       <p class="muted" style="margin-top:1rem">Your key is stored encrypted on a server run by ${o.operator} and used only to call Hevy on your behalf. ${o.operator} could technically read it. Leave any time by asking Claude to "disconnect from Hevy" or rotating the key at Hevy. <a href="/privacy">Details →</a></p>
-      <script>
+      <script nonce="${o.nonce}">
         (function () {
           var i = document.getElementById("hevy_key"), t = document.getElementById("toggle"), f = document.getElementById("f"), s = document.getElementById("submit");
           if (t && i) t.addEventListener("click", function () {
@@ -261,7 +263,7 @@ app.get("/authorize", async (c) => {
   }
   const inviteCookie = getCookie(c.req.raw, INVITE_COOKIE);
   const haveInvite = !!(c.env.MCP_INVITE_CODE && inviteCookie && constantTimeEqual(inviteCookie, c.env.MCP_INVITE_CODE));
-  return c.html(connectPage({ origin, client, req, showInvite: !haveInvite, operator: operatorName(c.env) }));
+  return c.html(connectPage({ origin, client, req, showInvite: !haveInvite, operator: operatorName(c.env), nonce: c.get("nonce") }));
 });
 
 // ---------- /approve — validate, then complete the grant ----------
@@ -298,9 +300,11 @@ app.post("/approve", async (c) => {
 
   // Brakes first. The rate-limit binding is best-effort (per Cloudflare
   // location); the KV counter backs it up across locations.
+  // The KV counter is best-effort (read-modify-write, eventually consistent);
+  // it bounds sustained abuse over an hour, not a burst — the binding does that.
   const failKey = `approve-fail:${ip}`;
   const [rl, fails] = await Promise.all([
-    c.env.APPROVE_RL.limit({ key: ip }).catch(() => ({ success: true })),
+    rateLimit(c.env.APPROVE_RL, ip),
     c.env.OAUTH_KV.get(failKey).then((v) => Number(v ?? 0)),
   ]);
   if (!rl.success || fails >= MAX_FAILS_PER_HOUR) {
@@ -315,7 +319,12 @@ app.post("/approve", async (c) => {
     );
   }
 
-  const body = await c.req.parseBody();
+  let body: Record<string, unknown>;
+  try {
+    body = await c.req.parseBody();
+  } catch {
+    return c.html(expiredPage(), 400);
+  }
   let req: AuthRequest | null = null;
   try {
     req = JSON.parse(String(body.oauthReqInfo)) as AuthRequest;
@@ -341,11 +350,16 @@ app.post("/approve", async (c) => {
 
   const canWrite = body.can_write === "on";
   const key = String(body.hevy_key ?? "").trim();
-  const inviteSubmitted = getCookie(c.req.raw, INVITE_COOKIE) ?? String(body.invite ?? "").trim();
-  const inviteOk = inviteSubmitted.length > 0 && constantTimeEqual(inviteSubmitted, c.env.MCP_INVITE_CODE);
+  // The cookie is a hint that can only help: a stale one (rotated invite) is
+  // treated as absent, never as a wrong answer. Only a typed code can be "wrong".
+  const typedInvite = String(body.invite ?? "").trim();
+  const cookieInvite = getCookie(c.req.raw, INVITE_COOKIE) || "";
+  const typedOk = typedInvite.length > 0 && constantTimeEqual(typedInvite, c.env.MCP_INVITE_CODE);
+  const inviteOk = typedOk || (cookieInvite.length > 0 && constantTimeEqual(cookieInvite, c.env.MCP_INVITE_CODE));
+  if (typedOk) c.header("Set-Cookie", cookie(INVITE_COOKIE, typedInvite, 365 * DAY));
 
   const again = (error: string, status: 400 | 401 | 403) =>
-    c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: !inviteOk, operator: operatorName(c.env), error, canWrite }), status);
+    c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: !inviteOk, operator: operatorName(c.env), nonce: c.get("nonce"), error, canWrite }), status);
 
   if (!UUID_RE.test(key)) {
     return again(
@@ -354,7 +368,7 @@ app.post("/approve", async (c) => {
     );
   }
 
-  if (!inviteOk && inviteSubmitted.length > 0) {
+  if (!inviteOk && typedInvite.length > 0) {
     await bumpFails(c.env, failKey);
     log("approve.bad_invite", { client });
     return again("That invite code isn't right. Check the message you were sent, or open the link in it.", 403);
@@ -401,17 +415,72 @@ app.post("/approve", async (c) => {
       memberRecordKey,
       JSON.stringify({ name: user.name, firstConnectedAt: existing?.firstConnectedAt ?? now, lastConnectedAt: now }),
     ),
-    c.env.OAUTH_KV.put(memberKey, userId),
+    c.env.OAUTH_KV.put(memberKey, userId, { expirationTtl: 365 * DAY }),
   ]);
   log("approve.connected", { userId, client, canWrite, returning: !!existing });
   return c.html(successPage(user.name, redirectTo, canWrite));
 });
 
 // ---------- /admin — owner only ----------
-function ownerOk(c: Context<{ Bindings: AppEnv }>): boolean {
-  const tok = getCookie(c.req.raw, OWNER_COOKIE);
-  return !!(c.env.OWNER_TOKEN && tok && constantTimeEqual(tok, c.env.OWNER_TOKEN));
+// Login is a POST with the token in the body (never a query string, which
+// lands in logs and browser history). The cookie holds an opaque session id
+// whose hash lives in KV for a day, scoped to /admin.
+async function rateLimit(binding: RateLimit | undefined, key: string): Promise<{ success: boolean }> {
+  if (!binding) return { success: true };
+  try {
+    return await binding.limit({ key });
+  } catch {
+    return { success: true };
+  }
 }
+
+async function ownerOk(c: Context<{ Bindings: AppEnv; Variables: Vars }>): Promise<boolean> {
+  if (!c.env.OWNER_TOKEN) return false;
+  const sid = getCookie(c.req.raw, OWNER_COOKIE);
+  if (!sid) return false;
+  const stored = await c.env.OAUTH_KV.get(`adminsession:${await sha256Hex(sid)}`);
+  return stored === "1";
+}
+
+const adminLoginPage = (nonce: string, error?: string) =>
+  layout(
+    html`<h1>Owner sign-in</h1>
+      ${error ? html`<div class="err">${error}</div>` : ""}
+      <form method="POST" action="/admin/login">
+        <label for="token">Owner token</label>
+        <input type="password" id="token" name="token" autocomplete="off" required />
+        <button type="submit" class="btn">Sign in</button>
+      </form>`,
+    "Hevy MCP — admin",
+  );
+
+app.get("/admin/login", (c) => (c.env.OWNER_TOKEN ? c.html(adminLoginPage(c.get("nonce"))) : c.notFound()));
+
+app.post("/admin/login", async (c) => {
+  if (!c.env.OWNER_TOKEN) return c.notFound();
+  const ip = clientIp(c.req.raw);
+  const rl = await rateLimit(c.env.ADMIN_RL, ip);
+  if (!rl.success) {
+    log("admin.throttled", {});
+    return c.html(adminLoginPage(c.get("nonce"), "Too many attempts. Wait a minute."), 429);
+  }
+  let body: Record<string, unknown>;
+  try {
+    body = await c.req.parseBody();
+  } catch {
+    return c.html(adminLoginPage(c.get("nonce"), "That didn't come through. Try again."), 400);
+  }
+  const token = String(body.token ?? "");
+  if (!token || !constantTimeEqual(token, c.env.OWNER_TOKEN)) {
+    log("admin.denied", {});
+    return c.html(adminLoginPage(c.get("nonce"), "That token isn't right."), 401);
+  }
+  const sid = randomToken();
+  await c.env.OAUTH_KV.put(`adminsession:${await sha256Hex(sid)}`, "1", { expirationTtl: DAY });
+  c.header("Set-Cookie", cookie(OWNER_COOKIE, sid, DAY, "/admin"));
+  log("admin.signed_in", {});
+  return c.redirect("/admin");
+});
 
 interface GrantRecord {
   id: string;
@@ -437,12 +506,7 @@ async function listPrefix<T>(kv: KVNamespace, prefix: string): Promise<T[]> {
 
 app.get("/admin", async (c) => {
   if (!c.env.OWNER_TOKEN) return c.notFound();
-  const token = c.req.query("token");
-  if (token && constantTimeEqual(token, c.env.OWNER_TOKEN)) {
-    c.header("Set-Cookie", cookie(OWNER_COOKIE, token, DAY));
-    return c.redirect("/admin");
-  }
-  if (!ownerOk(c)) return c.notFound();
+  if (!(await ownerOk(c))) return c.redirect("/admin/login");
 
   const grants = await listPrefix<GrantRecord>(c.env.OAUTH_KV, "grant:");
   grants.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
@@ -452,10 +516,14 @@ app.get("/admin", async (c) => {
       <td>${g.metadata?.client ?? "—"}<br /><span class="small">${g.clientId.length > 28 ? g.clientId.slice(0, 28) + "…" : g.clientId}</span></td>
       <td>${g.metadata?.canWrite ? "read + write" : "read"}</td>
       <td>${g.createdAt ? new Date(g.createdAt * 1000).toISOString().slice(0, 10) : "—"}</td>
-      <td>
-        <form method="POST" action="/admin/revoke" style="margin:0">
+      <td style="white-space:nowrap">
+        <form method="POST" action="/admin/revoke" style="margin:0;display:inline">
           <input type="hidden" name="userId" value="${g.userId}" /><input type="hidden" name="grantId" value="${g.id}" />
           <button class="copy" type="submit">Revoke</button>
+        </form>
+        <form method="POST" action="/admin/remove" style="margin:0;display:inline">
+          <input type="hidden" name="userId" value="${g.userId}" />
+          <button class="copy" type="submit" title="Revoke every grant for this person and forget them">Remove person</button>
         </form>
       </td>
     </tr>`,
@@ -463,7 +531,7 @@ app.get("/admin", async (c) => {
   return c.html(
     layout(
       html`<h1>Connected accounts</h1>
-        <p class="muted">${grants.length} grant(s). Revoking one deletes its tokens and the encrypted key inside it; the person reconnects from /start (no invite needed if they've connected before).</p>
+        <p class="muted">${grants.length} grant(s). <b>Revoke</b> kills one client's tokens and the encrypted key inside them; the person can reconnect from /start without an invite. <b>Remove person</b> revokes every grant they hold and forgets them, so reconnecting needs the invite link again.</p>
         <div style="overflow-x:auto">
           <table>
             <thead><tr><th>Who</th><th>Client</th><th>Access</th><th>Since</th><th></th></tr></thead>
@@ -476,13 +544,35 @@ app.get("/admin", async (c) => {
 });
 
 app.post("/admin/revoke", async (c) => {
-  if (!c.env.OWNER_TOKEN || !ownerOk(c)) return c.notFound();
-  const body = await c.req.parseBody();
+  if (!c.env.OWNER_TOKEN || !(await ownerOk(c))) return c.notFound();
+  const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
   const userId = String(body.userId ?? "");
   const grantId = String(body.grantId ?? "");
   if (userId && grantId) {
     await c.env.OAUTH_PROVIDER.revokeGrant(grantId, userId);
     log("admin.revoked", { userId, grantId });
+  }
+  return c.redirect("/admin");
+});
+
+/** Forget a person entirely: every grant, the membership record, every key hash pointing at them, the template cache. */
+app.post("/admin/remove", async (c) => {
+  if (!c.env.OWNER_TOKEN || !(await ownerOk(c))) return c.notFound();
+  const body = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const userId = String(body.userId ?? "");
+  if (userId) {
+    const revoked = await revokeAllGrants(c.env, userId);
+    const deletions: Promise<void>[] = [c.env.OAUTH_KV.delete(`member:${userId}`), c.env.OAUTH_KV.delete(`tplcache:${userId}`)];
+    let cursor: string | undefined;
+    do {
+      const page = await c.env.OAUTH_KV.list({ prefix: "memberkey:", cursor });
+      for (const k of page.keys) {
+        if ((await c.env.OAUTH_KV.get(k.name)) === userId) deletions.push(c.env.OAUTH_KV.delete(k.name));
+      }
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+    await Promise.all(deletions);
+    log("admin.removed", { userId, revoked });
   }
   return c.redirect("/admin");
 });

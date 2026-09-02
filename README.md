@@ -23,21 +23,25 @@ Prerequisites: a free Cloudflare account, Node 22 or newer (wrangler 4.x require
 git clone https://github.com/khglynn/hevy-mcp && cd hevy-mcp
 npm install
 npx wrangler kv namespace create OAUTH_KV     # paste the id into wrangler.jsonc
-# edit wrangler.jsonc: your KV id; OPERATOR_NAME = you; change or delete the
-# custom-domain "routes" line; delete the "migrations" block (it is this
-# deployment's history, not yours)
+# edit wrangler.jsonc: your KV id; change or delete the custom-domain "routes"
+# line; delete the "migrations" block (it is this deployment's history, not yours)
 INVITE=$(openssl rand -hex 16); echo "invite code: $INVITE"
 printf '%s' "$INVITE" | npx wrangler secret put MCP_INVITE_CODE   # required
 OWNER=$(openssl rand -hex 16); echo "owner token: $OWNER"
 printf '%s' "$OWNER" | npx wrangler secret put OWNER_TOKEN        # optional, unlocks /admin
+printf '%s' "Your Name" | npx wrangler secret put OPERATOR_NAME   # named on the connect + privacy pages
 npx wrangler deploy
 ```
 
-Write both values down now — Cloudflare will not show them to you again. Swap `src/favicon.ts` for your own 128px PNG if you want your mark on the pages.
+Write the invite code and owner token down now — Cloudflare will not show them to you again.
+
+**Set your name.** The connect and privacy pages tell people who is holding their key ("a server run by …"). Until `OPERATOR_NAME` is set they say "the person who runs this server". It is set as a secret only so it survives deploys and stays out of the repo.
+
+**Your icon.** `src/favicon.ts` holds a 128×128 PNG as a base64 string; replace `FAVICON_PNG_B64` with your own (`base64 < icon.png | tr -d '\n'`). It is the browser-tab icon, the OAuth `logo_uri`, and the MCP server icon; leave it and you ship someone else's mark.
 
 Then send people `https://<your-host>/start?invite=<MCP_INVITE_CODE>`. The invite rides in the link and is remembered by the browser; nobody types it. A key that has connected before never needs it again.
 
-`/admin?token=<OWNER_TOKEN>` shows who is connected (name, client, read or write, since when) with a revoke button.
+`/admin` (sign in with the owner token) shows who is connected (name, client, read or write, since when), with **Revoke** for one client's grant and **Remove person** to revoke everything they hold and forget them.
 
 Optional: set the repository variable `CANARY_BASE` to your origin for the weekly uptime check in `.github/workflows/canary.yml`, or delete that file.
 
@@ -50,7 +54,7 @@ npm run type-check
 INVITE=<value from .dev.vars> OWNER_TOKEN=<value> HEVY_API_KEY=<your key> npm run test:smoke
 ```
 
-The smoke test runs 43 checks against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 26 unauthenticated checks, which is what CI runs on every push.
+The smoke test runs 47 checks against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 28 unauthenticated checks, which is what CI runs on every push.
 
 ## How it works
 
@@ -73,7 +77,7 @@ Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶
 | | Tool | Notes |
 |---|---|---|
 | account | `whoami` | Which Hevy account, which client, read or write |
-| account | `disconnect` | Revokes every grant for this person and forgets they connected |
+| account | `disconnect` | Revokes every grant for this person and forgets the key they connected with |
 | read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_exercise_history`, `get_body_measurements` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
 | read | `search_exercise_templates` | Template list cached per user for 6 hours |
 | write | `create_workout`, `update_workout`, `create_routine`, `create_routine_folder`, `create_exercise_template`, `create_body_measurement` | `update_workout` is a full overwrite; Hevy has no delete or undo |

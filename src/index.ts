@@ -41,7 +41,14 @@ const api = {
         },
       );
     }
-    const handler = createMcpHandler(() => buildServer({ env, props, origin }), { route: "/mcp" });
+    // /mcp is bearer-only and reads no cookies, so browser CSRF / DNS rebinding —
+    // the threat Origin validation defends against — does not apply. Without
+    // this, agents 0.22.0 allowlists localhost only, and every request that
+    // carries an Origin header is 403'd on the custom domain.
+    const handler = createMcpHandler(() => buildServer({ env, props, origin }), {
+      route: "/mcp",
+      allowedOriginHostnames: "*",
+    });
     return handler(request, env, ctx);
   },
 };
@@ -100,6 +107,15 @@ function isOAuthMetadataPath(pathname: string): boolean {
   );
 }
 
+/** Headers every response gets, including the provider's own endpoints (/token, /register, /mcp). */
+function withBaseHeaders(res: Response, url: URL): Response {
+  const headers = new Headers(res.headers);
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Referrer-Policy", "no-referrer");
+  if (url.protocol === "https:") headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
 export default {
   async fetch(request: Request, env: AppEnv, ctx: ExecutionContext): Promise<Response> {
     const res = await provider.fetch(request, env, ctx);
@@ -113,11 +129,11 @@ export default {
         }
         const headers = new Headers(res.headers);
         headers.delete("content-length");
-        return new Response(JSON.stringify(meta), { status: res.status, headers });
+        return withBaseHeaders(new Response(JSON.stringify(meta), { status: res.status, headers }), url);
       } catch {
-        return res; // if the body isn't JSON for any reason, pass it through
+        return withBaseHeaders(res, url); // if the body isn't JSON for any reason, pass it through
       }
     }
-    return res;
+    return withBaseHeaders(res, url);
   },
 } satisfies ExportedHandler<AppEnv>;

@@ -38,14 +38,18 @@ export async function deriveUserId(hevyUserId: string): Promise<string> {
 }
 
 const UUID_ANYWHERE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+/** Field names whose values are masked whatever their shape — identity and secrets. */
+const REDACT_FIELDS = new Set(["name", "token", "invite", "secret", "authorization", "cookie", "hevyapikey", "access_token", "refresh_token", "code"]);
 
-/** Replace anything UUID-shaped (Hevy keys are UUIDs) so a key can never land in Workers Logs. */
+/** Mask anything UUID-shaped (Hevy keys are UUIDs) and any identity/secret field, so neither lands in Workers Logs. */
 export function redact<T>(value: T): T {
   if (typeof value === "string") return value.replace(UUID_ANYWHERE, "[redacted]") as T;
   if (Array.isArray(value)) return value.map(redact) as T;
   if (value && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = redact(v);
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = REDACT_FIELDS.has(k.toLowerCase()) && v != null ? "[redacted]" : redact(v);
+    }
     return out as T;
   }
   return value;
@@ -66,8 +70,13 @@ export function getCookie(request: Request, name: string): string | null {
   return null;
 }
 
-export function cookie(name: string, value: string, maxAgeSeconds: number): string {
-  return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Lax`;
+export function cookie(name: string, value: string, maxAgeSeconds: number, path = "/"): string {
+  return `${name}=${encodeURIComponent(value)}; Path=${path}; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Lax`;
+}
+
+/** Random, URL-safe, 128+ bits — session ids and CSP nonces. */
+export function randomToken(): string {
+  return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "").slice(0, 8);
 }
 
 /** The operator's name for user-facing copy. Set OPERATOR_NAME in wrangler.jsonc `vars`. */

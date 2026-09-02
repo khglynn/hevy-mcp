@@ -53,7 +53,13 @@ export interface TemplateCache {
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
+/** One budget per tool call: Hevy's Retry-After is honoured only inside it, so a rate-limit episode surfaces as a readable 429 instead of a client timeout. */
+const CALL_DEADLINE_MS = 15_000;
+const PER_REQUEST_TIMEOUT_MS = 10_000;
+
 export class HevyClient {
+  private deadline = Date.now() + CALL_DEADLINE_MS;
+
   constructor(
     private apiKey: string,
     private cache?: TemplateCache,
@@ -78,7 +84,8 @@ export class HevyClient {
 
     const maxAttempts = 4;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      const res = await fetch(url.toString(), { method, headers, body });
+      if (Date.now() > this.deadline) throw new HevyError(429, "Rate limited: call budget exhausted");
+      const res = await fetch(url.toString(), { method, headers, body, signal: AbortSignal.timeout(PER_REQUEST_TIMEOUT_MS) });
 
       if (res.status === 429 && attempt < maxAttempts) {
         const retryAfter = Number(res.headers.get("retry-after"));
@@ -86,6 +93,9 @@ export class HevyClient {
           Number.isFinite(retryAfter) && retryAfter > 0
             ? retryAfter * 1000
             : 400 * 2 ** (attempt - 1); // 400ms, 800ms, 1600ms
+        // Honour Retry-After only if the wait fits the call budget; otherwise
+        // stop now and let the tool report "Hevy is rate-limiting" instead of hanging.
+        if (Date.now() + delayMs > this.deadline) throw new HevyError(429, "Rate limited: Retry-After exceeds call budget");
         await new Promise((r) => setTimeout(r, delayMs));
         continue;
       }
@@ -127,19 +137,19 @@ export class HevyClient {
     return this.request("GET", "/workouts", { query });
   }
   getWorkout(id: string) {
-    return this.request("GET", `/workouts/${id}`);
+    return this.request("GET", `/workouts/${encodeURIComponent(id)}`);
   }
   getRoutines(query: { page?: number; pageSize?: number }) {
     return this.request("GET", "/routines", { query });
   }
   getRoutine(id: string) {
-    return this.request("GET", `/routines/${id}`);
+    return this.request("GET", `/routines/${encodeURIComponent(id)}`);
   }
   getRoutineFolders(query: { page?: number; pageSize?: number }) {
     return this.request("GET", "/routine_folders", { query });
   }
-  getExerciseHistory(exerciseTemplateId: string) {
-    return this.request("GET", `/exercise_history/${exerciseTemplateId}`);
+  getExerciseHistory(exerciseTemplateId: string, query: { start_date?: string; end_date?: string } = {}) {
+    return this.request("GET", `/exercise_history/${encodeURIComponent(exerciseTemplateId)}`, { query });
   }
   getBodyMeasurements(query: { page?: number; pageSize?: number }) {
     return this.request("GET", "/body_measurements", { query });
@@ -184,7 +194,7 @@ export class HevyClient {
     return this.request("POST", "/workouts", { body: { workout } });
   }
   updateWorkout(id: string, workout: unknown) {
-    return this.request("PUT", `/workouts/${id}`, { body: { workout } });
+    return this.request("PUT", `/workouts/${encodeURIComponent(id)}`, { body: { workout } });
   }
   createRoutine(routine: unknown) {
     return this.request("POST", "/routines", { body: { routine } });

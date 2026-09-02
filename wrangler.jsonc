@@ -4,16 +4,21 @@
  *
  * Secrets (NOT here — set via `wrangler secret put` / `.dev.vars`):
  *   MCP_INVITE_CODE — required. Generated (`openssl rand -hex 16`), carried in
- *                     the /start?invite= link Kevin sends. The server refuses
- *                     every new connection when it is unset (fail closed).
- *   OWNER_TOKEN     — optional. Unlocks /admin (who is connected, revoke).
- *                     /admin is a 404 when unset.
+ *                     the /start?invite= link you send people. The server
+ *                     refuses every new connection when it is unset (fail closed).
+ *   OWNER_TOKEN     — optional. Unlocks /admin (who is connected, revoke,
+ *                     remove). /admin is a 404 when unset. Make it long.
+ *   OPERATOR_NAME   — optional. Your name, shown on the connect and privacy
+ *                     pages as the person who can technically read keys. Set
+ *                     it as a secret so it survives deploys and stays out of
+ *                     the public repo; unset, the pages say "the person who
+ *                     runs this server".
  *
  * Deploying to your own account: replace the KV namespace id below with the
  * one `wrangler kv namespace create OAUTH_KV` prints, change or drop the
- * custom-domain route, set OPERATOR_NAME to yourself, and delete the
- * `migrations` block entirely — it is this deployment's history (a Durable
- * Object that no longer exists) and a fresh Worker does not need it.
+ * custom-domain route, and delete the `migrations` block entirely — it is
+ * this deployment's history (a Durable Object that no longer exists) and a
+ * fresh Worker does not need it.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -30,8 +35,9 @@
     { "tag": "v1", "new_sqlite_classes": ["HevyMCP"] },
     { "tag": "v2", "deleted_classes": ["HevyMCP"] }
   ],
-  // Named on the connect and privacy pages ("... a server run by X"). Not a secret.
-  "vars": { "OPERATOR_NAME": "Kevin" },
+  // wrangler dev uses the first route's hostname for request URLs; pin the
+  // local origin so dev pages don't print the production address.
+  "dev": { "host": "localhost:8787" },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",
@@ -42,7 +48,8 @@
   // The real gate is the invite code's entropy; this and the KV failure
   // counter in pages.ts just make brute force expensive.
   "ratelimits": [
-    { "name": "APPROVE_RL", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } }
+    { "name": "APPROVE_RL", "namespace_id": "2001", "simple": { "limit": 20, "period": 60 } },
+    { "name": "ADMIN_RL", "namespace_id": "2002", "simple": { "limit": 10, "period": 60 } }
   ],
   // The published URL. Cloudflare creates the DNS record on deploy; the
   // workers.dev hostname keeps working alongside it.

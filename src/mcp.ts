@@ -16,8 +16,8 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { FAVICON_DATA_URI } from "./favicon";
-import { HevyClient, HevyError } from "./hevy";
-import { type AppEnv, log, memberKeyFor, revokeAllGrants } from "./util";
+import { HevyClient, HevyError, validateHevyKey } from "./hevy";
+import { type AppEnv, log, memberKeyFor, operatorName, revokeAllGrants } from "./util";
 
 export const PROPS_VERSION = 2;
 
@@ -78,16 +78,30 @@ function errorResult(text: string) {
 async function fail(e: unknown, ctx: ToolContext) {
   if (e instanceof HevyError) {
     if (e.status === 401) {
+      // Confirm before tearing anything down: revoke only if the key itself is
+      // rejected by Hevy's own user-info endpoint. A 401 from an odd path, a
+      // gateway blip or a network error must not cost someone every connector.
+      let confirmedDead = false;
+      try {
+        await validateHevyKey(ctx.props.hevyApiKey);
+      } catch (check) {
+        confirmedDead = check instanceof HevyError && check.status === 401;
+      }
+      if (!confirmedDead) {
+        log("hevy.unauthorized_unconfirmed", { userId: ctx.props.hevyUserId });
+        return errorResult("Hevy answered 401 to that request but your key still checks out, so nothing was changed. Try again in a moment; if it keeps happening, the specific id you asked for may be wrong.");
+      }
       let revoked = 0;
       try {
         revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
+        await ctx.env.OAUTH_KV.delete(await memberKeyFor(ctx.props.hevyApiKey));
       } catch (revokeErr) {
         log("hevy.revoke_failed", { userId: ctx.props.hevyUserId, error: String(revokeErr) });
       }
       log("hevy.key_rejected", { userId: ctx.props.hevyUserId, client: ctx.props.client, revoked });
       return errorResult(
         `Your Hevy key isn't working anymore — Hevy rejected it. That usually means a new key was generated at hevy.com, which retires the old one. ` +
-          `This connection has been disconnected. Remove the Hevy connector and add it again, then paste your current key. Start here: ${ctx.origin}/start`,
+          `This connection has been disconnected. To reconnect: remove the Hevy connector, add it again, and paste your current key. Because it is a new key, the page will ask for the invite — open the invite link you were originally sent (or ask ${operatorName(ctx.env)} for it), then start here: ${ctx.origin}/start`,
       );
     }
     if (e.status === 403) {
@@ -243,7 +257,7 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "disconnect",
-    "Disconnect this Hevy account from the server: revokes every grant for this person and forgets that they ever connected, so no client can use the stored key. Ask before calling this.",
+    "Disconnect this Hevy account from the server: revokes every grant for this person and forgets the key they connected with, so no client can use the stored key. Ask before calling this.",
     {},
     async () => {
       const revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
@@ -253,7 +267,7 @@ export function buildServer(ctx: ToolContext): McpServer {
         ctx.env.OAUTH_KV.delete(`tplcache:${ctx.props.hevyUserId}`),
       ]);
       log("user.disconnected", { userId: ctx.props.hevyUserId, revoked });
-      return `Disconnected. ${revoked} connection(s) revoked and the stored key is gone with them; this server has also forgotten that you connected, so reconnecting needs an invite link again. To cut Hevy access at the source too, rotate the key at hevy.com/settings?developer. Reconnect any time: ${ctx.origin}/start`;
+      return `Disconnected. ${revoked} connection(s) revoked and the stored key is gone with them; this server has also forgotten the key you connected with, so reconnecting needs an invite link again. To cut Hevy access at the source too, rotate the key at hevy.com/settings?developer. Reconnect any time: ${ctx.origin}/start`;
     },
   );
 
@@ -332,13 +346,27 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "get_exercise_history",
-    "Get the logged history for one exercise across all workouts (progress over time).",
+    "Get the logged history for one exercise (progress over time). Defaults to the last 12 months and at most 200 most-recent entries; pass start_date/end_date to move the window.",
     {
       exerciseTemplateId: z
         .string()
         .describe("Exercise template id, from search_exercise_templates."),
+      start_date: z.string().optional().describe("ISO 8601 date-time, e.g. 2026-01-01T00:00:00Z. Default: 12 months ago."),
+      end_date: z.string().optional().describe("ISO 8601 date-time. Default: now."),
     },
-    ({ exerciseTemplateId }, hevy) => hevy.getExerciseHistory(exerciseTemplateId),
+    async ({ exerciseTemplateId, start_date, end_date }, hevy) => {
+      const start = start_date ?? new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
+      const data = await hevy.getExerciseHistory(exerciseTemplateId, { start_date: start, end_date });
+      const history: unknown[] = Array.isArray(data?.exercise_history) ? data.exercise_history : [];
+      const cap = 200;
+      if (history.length <= cap) return { ...data, window: { start_date: start, end_date: end_date ?? "now" } };
+      return {
+        ...data,
+        exercise_history: history.slice(-cap),
+        window: { start_date: start, end_date: end_date ?? "now" },
+        note: `${history.length} entries in this window; showing the most recent ${cap}. Narrow start_date/end_date for the rest.`,
+      };
+    },
   );
 
   reg(
