@@ -75,7 +75,7 @@ function errorResult(text: string) {
  * Turn a failure into something a person can act on. The 401 branch is the
  * one that matters: Hevy rejected the key, so the grant is revoked here and
  * the client's next request gets an HTTP 401, which is what makes Claude
- * re-run OAuth. Without that, a rotated key means a connector that looks
+ * re-run OAuth. Without that, a revoked key means a connector that looks
  * healthy and errors forever.
  */
 async function fail(e: unknown, ctx: ToolContext, isWrite: boolean) {
@@ -105,7 +105,7 @@ async function fail(e: unknown, ctx: ToolContext, isWrite: boolean) {
       }
       log("hevy.key_rejected", { userId: ctx.props.hevyUserId, client: ctx.props.client, revoked });
       return errorResult(
-        `Your Hevy key isn't working anymore — Hevy rejected it. That usually means a new key was generated at hevy.com, which retires the old one. ` +
+        `Your Hevy key isn't working anymore — Hevy rejected it. That usually means it was revoked or replaced on Hevy's Developer page. ` +
           `This connection has been disconnected. To reconnect: remove the Hevy connector, add it again, and paste your current key. Because it is a new key, the page will ask for the invite — open the invite link you were originally sent (or ask ${operatorName(ctx.env)} for it), then start here: ${ctx.origin}/start`,
       );
     }
@@ -297,7 +297,7 @@ export function buildServer(ctx: ToolContext): McpServer {
         ctx.env.OAUTH_KV.delete(`tplcache:${ctx.props.hevyUserId}`),
       ]);
       log("user.disconnected", { userId: ctx.props.hevyUserId, revoked });
-      return `Disconnected. ${revoked} connection(s) revoked and the stored key is gone with them; this server has also forgotten the key you connected with, so reconnecting needs an invite link again. To cut Hevy access at the source too, rotate the key at hevy.com/settings?developer. Reconnect any time: ${ctx.origin}/start`;
+      return `Disconnected. ${revoked} connection(s) revoked and the stored key is gone with them; this server has also forgotten the key you connected with, so reconnecting needs an invite link again. To cut Hevy access at the source too, revoke the key on Hevy's Developer page (hevy.com/settings?developer). Reconnect any time: ${ctx.origin}/start`;
     },
   );
 

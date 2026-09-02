@@ -10,7 +10,7 @@
 
 ## How long
 
-Access tokens last 7 days and are refreshed silently by your client. The connection itself lasts a year from the day you connect, however often you use it; after that Claude asks you to paste your Hevy key again, and the stored key is gone with the expired connection. Save your key somewhere you can find it. The record that your account has connected before (name, hashed id, a hash of the key you used, dates) is kept for a year so you can reconnect without a fresh invite, or until you disconnect.
+Access tokens last 7 days and are refreshed silently by your client. The connection itself lasts a year from the day you connect, however often you use it; after that your assistant asks you to paste your Hevy key again (it is still on Hevy's Developer page), and the stored key is gone with the expired connection. The record that your account has connected before (name, hashed id, a hash of the key you used, dates) is kept for a year so you can reconnect without a fresh invite, or until you disconnect.
 
 ## Who can read it
 
@@ -19,5 +19,5 @@ The person operating the deployment could technically read a key while a request
 ## Leaving
 
 - Ask your assistant to **"disconnect from Hevy"** — this revokes every connection, deletes the stored key, and forgets the key you connected with.
-- Rotate your key at [hevy.com/settings?developer](https://hevy.com/settings?developer) — that instantly makes the stored copy useless to this server and anything else holding the old key; it is cleared the next time anything tries to use it.
+- Revoke the key on [Hevy's Developer page](https://hevy.com/settings?developer) — that instantly makes the stored copy useless to this server and anything else holding it; it is cleared the next time anything tries to use it.
 - Removing the connector in Claude alone does not delete the stored key; use one of the two steps above.

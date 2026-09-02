@@ -9,17 +9,17 @@ Two ways to use it: connect to an instance someone runs for you, or deploy your 
 You need two things, both on a computer:
 
 1. **Hevy Pro.** The Hevy API is a Pro feature; free accounts can't create a key.
-2. **A Hevy API key** from [hevy.com/settings?developer](https://hevy.com/settings?developer) (the website, not the phone app). Save it somewhere — Hevy shows it once.
+2. **A Hevy API key** from [hevy.com/settings?developer](https://hevy.com/settings?developer) (the website, not the phone app). It stays on that page, next to a Revoke button.
 
 Then open the invite link you were sent. That page has the steps and a Copy button for the address you'll need. In short:
 
-1. Get your key from Hevy and save it somewhere; Hevy shows it once.
-2. In Claude on the web or desktop: **Customize → Connectors → + → Add custom connector**. Paste the address from that page; leave Client ID and Client Secret blank. On a Team or Enterprise account an Owner adds it under Organization settings → Connectors, then you click Connect.
+1. Copy your key from Hevy's Developer page.
+2. In Claude on the web or desktop: **Customize → Connectors → + → Add custom connector**. Paste the address from that page. Claude detects the sign-in settings itself ("Always required", Anthropic's hosted client metadata); keep the defaults and continue. On a Team or Enterprise account an Owner adds it under Organization settings → Connectors, then you click Connect.
 3. Claude opens a page asking for your Hevy key. Paste it and press Connect.
 
 A phone can use the connector once it is added on a computer, but can't add one. There is a checkbox, "let Claude add and edit": leave it off and Claude can only read your workouts; tick it and Claude can log workouts and build routines, but Hevy has no undo, so anything it changes in a saved workout replaces what was there. Using ChatGPT, Claude Code or Cursor? Open the invite link first, then add the same address the way that app adds MCP servers.
 
-Leaving: ask Claude to **"disconnect from Hevy"** — that revokes the connection and deletes the stored key. Or rotate your key at Hevy, which instantly makes the stored copy useless (it is cleared the next time anything tries to use it). See [PRIVACY.md](./PRIVACY.md) for what is stored and for how long.
+Leaving: ask Claude to **"disconnect from Hevy"** — that revokes the connection and deletes the stored key. Or revoke the key on Hevy's Developer page, which instantly makes the stored copy useless (it is cleared the next time anything tries to use it). See [PRIVACY.md](./PRIVACY.md) for what is stored and for how long.
 
 ## Deploy your own
 

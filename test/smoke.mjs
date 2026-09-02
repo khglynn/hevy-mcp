@@ -59,6 +59,7 @@ async function main() {
   const issuerOrigin = new URL(as.issuer).origin;
   check("/start 200 with the /mcp URL", start.status === 200 && startHtml.includes(`${issuerOrigin}/mcp`), `issuer=${issuerOrigin}`);
   check("/start sets security headers", start.headers.get("x-content-type-options") === "nosniff" && (start.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none'"));
+  check("/start renders the three-plate rail", (startHtml.match(/class="plate"/g) ?? []).length === 3);
   const badInvite = await fetch(`${BASE}/start?invite=definitely-wrong`);
   check("/start with wrong invite: no cookie, explains", !badInvite.headers.get("set-cookie") && (await textOf(badInvite)).includes("isn't right"));
   let inviteCookie = "";
@@ -104,7 +105,7 @@ async function main() {
   const authUrl = `${BASE}/authorize?${form({ client_id: clientId, redirect_uri: redirectUri, response_type: "code", code_challenge: challenge, code_challenge_method: "S256", state: "smoke-state" })}`;
   const authz = await fetch(authUrl);
   const authzHtml = await authz.text();
-  check("/authorize renders consent for Claude", authz.status === 200 && authzHtml.includes("Connect your Hevy account") && authzHtml.includes("<b>Claude</b>"));
+  check("/authorize renders consent for Claude", authz.status === 200 && authzHtml.includes('data-page="connect"') && authzHtml.includes("<b>Claude</b>"));
   check("/authorize shows invite field without cookie", authzHtml.includes('name="invite"'));
   if (inviteCookie) {
     const withCookie = await fetch(authUrl, { headers: { cookie: inviteCookie } });

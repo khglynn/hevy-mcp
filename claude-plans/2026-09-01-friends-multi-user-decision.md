@@ -4,7 +4,7 @@
 
 ## 1. Where we are
 
-The server at `hevy-mcp.kevinhg.workers.dev` holds one Hevy API key (Kevin's) as a Worker secret. The passphrase decides who may connect; everyone who connects reaches Kevin's account. So the URL plus passphrase would hand a friend Kevin's workouts, not theirs. Making it usable by a friend means each person brings their own Hevy API key, which Hevy only issues to Pro subscribers, from the web app, shown once.
+The server at `hevy-mcp.kevinhg.workers.dev` holds one Hevy API key (Kevin's) as a Worker secret. The passphrase decides who may connect; everyone who connects reaches Kevin's account. So the URL plus passphrase would hand a friend Kevin's workouts, not theirs. Making it usable by a friend means each person brings their own Hevy API key, which Hevy only issues to Pro subscribers, from the web app (it stays visible on the Developer page, with a Revoke button — an earlier draft here said "shown once", which was wrong).
 
 The passphrase question (a password-shaped string found next to the MCP URL in an old audit bundle on the SanDisk, 2026-08-31) goes away with this redesign: the shared passphrase is deleted. Git history was scanned across all nine commits for key and passphrase values and is clean.
 
@@ -77,7 +77,7 @@ Each phase ends with a triple-check, a commit, and a pause for review.
 
 ## 7. Verified facts (2026-09-01)
 
-- Hevy API is key-only, Pro-only, keys issued at `hevy.com/settings?developer`, shown once; `GET /v1/user/info` returns `{ data: { id, name, url } }`; bad key → 401 `InvalidApiKey`; no DELETE endpoints; no published rate limit. Hevy's app terms say nothing about API keys or third-party services.
+- Hevy API is key-only, Pro-only, keys issued at `hevy.com/settings?developer` and shown there persistently with a Revoke button; `GET /v1/user/info` returns `{ data: { id, name, url } }`; bad key → 401 `InvalidApiKey`; no DELETE endpoints; no published rate limit. Hevy's app terms say nothing about API keys or third-party services.
 - Claude custom connectors: Free (one connector), Pro, Max, Team, Enterprise; Team/Enterprise only Owners add them; phones use but cannot add; Claude sends S256 PKCE; refresh reactive on 401 and proactive within 5 minutes of expiry. ChatGPT: Developer Mode required; writes only on Business/Enterprise/Edu.
 - `workers-oauth-provider`: props encrypted with the token as key material (unconditional); `revokeExistingGrants` defaults true in 0.4.0 and 0.10.3; `clientRegistrationCallback` absent in 0.4.0, present in 0.8.0+; `refreshTokenTTL` default 30 days and `clientRegistrationTTL` 90 days since 0.5.0; plain PKCE advertised by default in 0.4.0.
 - `agents` 0.20.0 deprecated `McpAgent`; the stateless handler exposes `getMcpAuthContext().props` sourced from the provider's verified token props (read in the 0.22.0 dist).
@@ -88,7 +88,7 @@ Each phase ends with a triple-check, a commit, and a pause for review.
 
 > Made you a thing: Claude can read and write your Hevy workouts. Two steps, both on a computer.
 >
-> 1. hevy.kevinhg.com/start?invite=… — grab your Hevy API key there (needs Hevy Pro, $2.99/mo). Save it somewhere; Hevy only shows it once.
+> 1. hevy.kevinhg.com/start?invite=… — it walks you through getting your Hevy API key (needs Hevy Pro, $2.99/mo).
 > 2. In your personal Claude: Settings → Connectors → Add custom connector → paste the URL on that page → paste your key.
 >
-> It runs on my server. Your key is stored encrypted and only used to talk to Hevy as you; I can technically read it, and rotating the key at Hevy cuts it off instantly. Ask it what you benched last week. Tell me if anything is confusing.
+> It runs on my server. Your key is stored encrypted and only used to talk to Hevy as you; I can technically read it, and revoking the key on Hevy's Developer page cuts it off instantly. Ask it what you benched last week. Tell me if anything is confusing.
