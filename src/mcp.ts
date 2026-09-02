@@ -255,19 +255,31 @@ const routineSet = z.object({
   duration_seconds: z.number().int().nullable().optional(),
   custom_metric: z.number().nullable().optional(),
   rep_range: z
-    .object({ start: z.number(), end: z.number() })
+    .object({ start: z.number().nullable().optional(), end: z.number().nullable().optional() })
     .nullable()
     .optional()
-    .describe("Target rep range, e.g. { start: 8, end: 12 }."),
+    .describe("Target rep range, e.g. { start: 8, end: 12 }; one side may be empty."),
 });
 
+// Hevy's read shape (get_routine) and write shape differ: reads say
+// `supersets_id`, writes want `superset_id`; reads can carry rest_seconds as a
+// string. Both spellings are accepted so "read it, edit it, send it back" works.
 const routineExercise = z.object({
   exercise_template_id: z.string(),
   superset_id: z.number().int().nullable().optional(),
-  rest_seconds: z.number().int().nullable().optional(),
+  supersets_id: z.number().int().nullable().optional().describe("Same as superset_id; the name get_routine uses."),
+  rest_seconds: z.coerce.number().int().nullable().optional(),
   notes: z.string().nullable().optional(),
   sets: z.array(routineSet),
 });
+
+/** Normalise a routine body for Hevy's PUT/POST: fold the read-shape alias into the write-shape field. */
+function forHevyRoutine<T extends { exercises: z.infer<typeof routineExercise>[] }>(routine: T): T {
+  return {
+    ...routine,
+    exercises: routine.exercises.map(({ supersets_id, superset_id, ...e }) => ({ ...e, superset_id: superset_id ?? supersets_id ?? null })),
+  };
+}
 
 // ---------- the server, per request ----------
 export function buildServer(ctx: ToolContext): McpServer {
@@ -306,6 +318,19 @@ export function buildServer(ctx: ToolContext): McpServer {
     },
     async ({ everywhere, connection_id }) => {
       const userId = ctx.props.hevyUserId;
+      try {
+        return await disconnectImpl({ everywhere, connection_id, userId });
+      } catch (e) {
+        log("tool.unexpected_error", { userId, tool: "disconnect", error: String(e) });
+        return errorResult(
+          "This connection may not have been fully removed. Try again; if it keeps failing, remove the connector in your app and revoke the key on Hevy's Developer page: https://hevy.com/settings?developer",
+        );
+      }
+    },
+  );
+
+  async function disconnectImpl({ everywhere, connection_id, userId }: { everywhere?: boolean; connection_id?: string; userId: string }) {
+    {
       if (everywhere) {
         const { revoked, keysForgotten } = await forgetPerson(ctx.env, userId);
         log("user.disconnected", { userId, revoked, keysForgotten, scope: "everywhere" });
@@ -336,8 +361,8 @@ export function buildServer(ctx: ToolContext): McpServer {
       await ctx.env.OAUTH_KV.delete(ctx.grant.tokenKey);
       log("user.disconnected", { userId, scope: "app", client: ctx.props.client });
       return `Disconnected this app. Other apps connected to the same Hevy account keep working; ask to "disconnect from Hevy everywhere" to remove them all. Reconnect anytime: ${ctx.origin}/start`;
-    },
-  );
+    }
+  }
 
   reg(
     server,
@@ -565,7 +590,7 @@ export function buildServer(ctx: ToolContext): McpServer {
       notes: z.string().optional(),
       exercises: z.array(routineExercise),
     },
-    (r, hevy) => hevy.createRoutine(r),
+    (r, hevy) => hevy.createRoutine(forHevyRoutine(r)),
   );
 
   reg(
@@ -580,7 +605,7 @@ export function buildServer(ctx: ToolContext): McpServer {
       notes: z.string().nullable().optional(),
       exercises: z.array(routineExercise),
     },
-    ({ routineId, ...routine }, hevy) => hevy.updateRoutine(routineId, routine),
+    ({ routineId, ...routine }, hevy) => hevy.updateRoutine(routineId, forHevyRoutine(routine)),
   );
 
   reg(
@@ -612,6 +637,9 @@ export function buildServer(ctx: ToolContext): McpServer {
   );
 
   const cm = (what: string) => z.number().nullable().optional().describe(`${what}, in centimetres.`);
+  // Hevy returns these seven without the unit suffix (get_body_measurement),
+  // so both spellings are accepted; the suffixed one wins when both are sent.
+  const alias = (of: string) => z.number().nullable().optional().describe(`Same as ${of}; the name Hevy uses when it returns a measurement.`);
   reg(
     server,
     ctx,
@@ -636,18 +664,25 @@ export function buildServer(ctx: ToolContext): McpServer {
       right_thigh_cm: cm("Right thigh"),
       left_calf_cm: cm("Left calf"),
       right_calf_cm: cm("Right calf"),
+      abdomen: alias("abdomen_cm"),
+      waist: alias("waist_cm"),
+      hips: alias("hips_cm"),
+      left_thigh: alias("left_thigh_cm"),
+      right_thigh: alias("right_thigh_cm"),
+      left_calf: alias("left_calf_cm"),
+      right_calf: alias("right_calf_cm"),
     },
-    ({ abdomen_cm, waist_cm, hips_cm, left_thigh_cm, right_thigh_cm, left_calf_cm, right_calf_cm, ...rest }, hevy) =>
+    ({ abdomen_cm, abdomen, waist_cm, waist, hips_cm, hips, left_thigh_cm, left_thigh, right_thigh_cm, right_thigh, left_calf_cm, left_calf, right_calf_cm, right_calf, ...rest }, hevy) =>
       // Hevy's wire format leaves these seven unsuffixed; the model-facing names carry the unit.
       hevy.createBodyMeasurement({
         ...rest,
-        abdomen: abdomen_cm,
-        waist: waist_cm,
-        hips: hips_cm,
-        left_thigh: left_thigh_cm,
-        right_thigh: right_thigh_cm,
-        left_calf: left_calf_cm,
-        right_calf: right_calf_cm,
+        abdomen: abdomen_cm ?? abdomen,
+        waist: waist_cm ?? waist,
+        hips: hips_cm ?? hips,
+        left_thigh: left_thigh_cm ?? left_thigh,
+        right_thigh: right_thigh_cm ?? right_thigh,
+        left_calf: left_calf_cm ?? left_calf,
+        right_calf: right_calf_cm ?? right_calf,
       }),
   );
 
@@ -675,18 +710,25 @@ export function buildServer(ctx: ToolContext): McpServer {
       right_thigh_cm: cm("Right thigh"),
       left_calf_cm: cm("Left calf"),
       right_calf_cm: cm("Right calf"),
+      abdomen: alias("abdomen_cm"),
+      waist: alias("waist_cm"),
+      hips: alias("hips_cm"),
+      left_thigh: alias("left_thigh_cm"),
+      right_thigh: alias("right_thigh_cm"),
+      left_calf: alias("left_calf_cm"),
+      right_calf: alias("right_calf_cm"),
     },
-    ({ date, abdomen_cm, waist_cm, hips_cm, left_thigh_cm, right_thigh_cm, left_calf_cm, right_calf_cm, ...rest }, hevy) =>
+    ({ date, abdomen_cm, abdomen, waist_cm, waist, hips_cm, hips, left_thigh_cm, left_thigh, right_thigh_cm, right_thigh, left_calf_cm, left_calf, right_calf_cm, right_calf, ...rest }, hevy) =>
       // Hevy's wire format leaves these seven unsuffixed; the model-facing names carry the unit.
       hevy.updateBodyMeasurement(date, {
         ...rest,
-        abdomen: abdomen_cm,
-        waist: waist_cm,
-        hips: hips_cm,
-        left_thigh: left_thigh_cm,
-        right_thigh: right_thigh_cm,
-        left_calf: left_calf_cm,
-        right_calf: right_calf_cm,
+        abdomen: abdomen_cm ?? abdomen,
+        waist: waist_cm ?? waist,
+        hips: hips_cm ?? hips,
+        left_thigh: left_thigh_cm ?? left_thigh,
+        right_thigh: right_thigh_cm ?? right_thigh,
+        left_calf: left_calf_cm ?? left_calf,
+        right_calf: right_calf_cm ?? right_calf,
       }),
   );
 

@@ -310,12 +310,19 @@ async function main() {
   check(`list_connections shows this connection${connsNote}`, conns.status === 200 && (conns.body?.result?.content?.[0]?.text ?? "").includes('"this_app": true'), conns.raw);
   check("get_workout_events reaches Hevy (events array)", events.status === 200 && (events.body?.result?.content?.[0]?.text ?? "").includes('"events"'), events.raw);
 
+  const disconnectedAt = Date.now();
   const bye = await rpc2("tools/call", { name: "disconnect", arguments: {} }, 7);
   check("disconnect (this app) answers", bye.status === 200 && (bye.body?.result?.content?.[0]?.text ?? "").includes("Disconnected this app"), bye.raw);
   const { result: after, note: afterNote } = await settles(() => rpc2("tools/list", {}, 8), (r) => r.status === 401, (r) => r.status === 200);
   check(`that token is refused afterwards (401 → client re-runs OAuth)${afterNote}`, after.status === 401, `got ${after.status}`);
+  // The survivor's token and grant records were read seconds ago and sit in
+  // the edge cache for ~60s, so in production a 200 here could be the cache
+  // answering for a connection that was in fact revoked. Ask only after the
+  // cache window has passed (immediately against local Miniflare).
+  const cacheWindowMs = /localhost|127\.0\.0\.1/.test(BASE) ? 0 : 70_000;
+  await new Promise((r) => setTimeout(r, Math.max(0, cacheWindowMs - (Date.now() - disconnectedAt))));
   const survivor = await rpc("tools/list", {}, 9);
-  check("the other connection on the same key still works (disconnect is per app)", survivor.status === 200, `got ${survivor.status}`);
+  check("the other connection on the same key still works after the cache window (disconnect is per app)", survivor.status === 200, `got ${survivor.status}`);
 
   // Leave no grants behind: the read-only grant goes too, so smoke runs never
   // pile up year-long grants on the operator's real key or knock out the
