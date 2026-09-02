@@ -118,6 +118,14 @@ export function clientIp(request: Request): string {
  * carries that key fingerprint go — so a retired key on one client never
  * takes down a healthy client that already reconnected with the new key.
  */
+/**
+ * Revoke every grant a person holds, or only those carrying one key
+ * fingerprint (a dead key must not take down a client that already
+ * reconnected with a new one). Enumerates with a KV list, which is eventually
+ * consistent in production: best effort for grants created moments ago. The
+ * per-app `disconnect` tool does not use this; it deletes its own token
+ * record and grant by id.
+ */
 export async function revokeAllGrants(env: AppEnv, userId: string, onlyFingerprint?: string): Promise<number> {
   let revoked = 0;
   let cursor: string | undefined;

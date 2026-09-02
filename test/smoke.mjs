@@ -19,6 +19,24 @@ const HEVY_API_KEY = process.env.HEVY_API_KEY ?? "";
 
 let failures = 0;
 let passes = 0;
+/**
+ * Production KV serves a cached copy of a key for up to ~60s after it was
+ * written or deleted, so a check that depends on a fresh write or a revocation
+ * can lag there. Poll until `until` holds (at most 90s in production; one
+ * attempt locally, where Miniflare's KV is immediately consistent).
+ */
+async function settles(attempt, until) {
+  const maxMs = /localhost|127\.0\.0\.1/.test(BASE) ? 0 : 90_000;
+  const started = Date.now();
+  let last = await attempt();
+  while (!until(last) && Date.now() - started < maxMs) {
+    await new Promise((r) => setTimeout(r, 3000));
+    last = await attempt();
+  }
+  const waited = Date.now() - started;
+  return { result: last, note: waited > 3000 ? ` (settled after ${Math.round(waited / 1000)}s: KV cache)` : "" };
+}
+
 function check(name, cond, detail = "") {
   if (cond) {
     passes++;
@@ -77,6 +95,14 @@ async function main() {
   check("/admin without a session → redirected to sign-in", admin.status === 302 && (admin.headers.get("location") ?? "").endsWith("/admin/login"));
   const adminQuery = await fetch(`${BASE}/admin?token=${encodeURIComponent(process.env.OWNER_TOKEN ?? "x")}`, { redirect: "manual" });
   check("/admin?token= is not a sign-in (no cookie)", !(adminQuery.headers.get("set-cookie") ?? "").includes("hevy_owner="));
+
+  // --- link previews + icons ---
+  const og = await fetch(`${BASE}/og.png`);
+  check("/og.png is a PNG with a day of cache", og.status === 200 && (og.headers.get("content-type") ?? "").startsWith("image/png") && (og.headers.get("cache-control") ?? "").includes("max-age"), `${og.status} ${og.headers.get("content-type")}`);
+  const touch = await fetch(`${BASE}/apple-touch-icon.png`);
+  check("/apple-touch-icon.png serves the icon", touch.status === 200 && (touch.headers.get("content-type") ?? "").startsWith("image/png"), `${touch.status}`);
+  const startHead = await fetch(`${BASE}/start`).then((r) => r.text());
+  check("/start carries link-preview tags with an absolute og:image", startHead.includes(`property="og:image" content="${BASE}/og.png"`) && startHead.includes('property="og:title"'));
 
   // --- client allowlist at /register ---
   const evil = await fetch(`${BASE}/register`, {
@@ -206,13 +232,23 @@ async function main() {
   });
   check("/mcp accepts a request carrying Origin: https://claude.ai (not 403)", originCheck.status === 200, `got ${originCheck.status}`);
 
-  const refresh = await fetch(`${BASE}/token`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: form({ grant_type: "refresh_token", refresh_token: tokBody.refresh_token, client_id: clientId }),
-  });
-  const refreshBody = await refresh.json();
-  check("refresh_token grant issues a new access token", refresh.status === 200 && typeof refreshBody.access_token === "string" && refreshBody.access_token !== token, JSON.stringify(refreshBody).slice(0, 200));
+  // The code exchange reads the grant record (caching the pre-exchange copy at
+  // that colo) and then rewrites it with the refresh-token hash, so a refresh
+  // seconds later can be answered from the stale copy with "Invalid refresh
+  // token". Real clients refresh days later; here we wait it out.
+  const { result: refresh, note: refreshNote } = await settles(
+    async () => {
+      const r = await fetch(`${BASE}/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: form({ grant_type: "refresh_token", refresh_token: tokBody.refresh_token, client_id: clientId }),
+      });
+      return { status: r.status, body: await r.json() };
+    },
+    (r) => r.status === 200,
+  );
+  const refreshBody = refresh.body;
+  check(`refresh_token grant issues a new access token${refreshNote}`, refresh.status === 200 && typeof refreshBody.access_token === "string" && refreshBody.access_token !== token, JSON.stringify(refreshBody).slice(0, 200));
   const refreshed = await fetch(`${BASE}/mcp`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${refreshBody.access_token}` },
@@ -234,18 +270,12 @@ async function main() {
   const list2 = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${tok2.access_token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/list", params: {} }) }).then((r) => r.text());
   check("write grant lists create_workout", list2.includes('"create_workout"'));
 
-  // Re-authorizing the same client replaces its previous grant
-  // (revokeExistingGrants, the library default) — so the first token is dead now.
-  // Local only: the library's revoke-on-re-auth enumerates grants with a KV
-  // list, which is eventually consistent in production, so a grant created
-  // moments earlier can survive there (it expires on its own). Miniflare's KV
-  // is immediately consistent, so the behavior is asserted locally.
-  if (/localhost|127\.0\.0\.1/.test(BASE)) {
-    const stale = await rpc("tools/list", {}, 6);
-    check("re-authorizing the same client revoked the earlier grant (401)", stale.status === 401, `got ${stale.status}`);
-  } else {
-    console.log("  skip revoke-on-re-auth check (KV list is eventually consistent in production)");
-  }
+  // A second authorization from the same client must NOT log the first one
+  // out: claude.ai is one client id for every claude.ai account, so the
+  // library's revoke-on-re-auth default made two accounts on one Hevy key
+  // fight over it (2026-09-02). Every connection is its own grant.
+  const first = await rpc("tools/list", {}, 6);
+  check("a second authorization keeps the earlier connection working (200)", first.status === 200, `got ${first.status}`);
 
   // --- disconnect revokes; the same token must then be refused ---
   const rpc2 = async (method, params = {}, id = 1) => {
@@ -261,9 +291,19 @@ async function main() {
     return { status: r.status, body, raw: text.slice(0, 300) };
   };
   const bye = await rpc2("tools/call", { name: "disconnect", arguments: {} }, 7);
-  check("disconnect tool revokes grants", bye.status === 200 && (bye.body?.result?.content?.[0]?.text ?? "").includes("Disconnected"), bye.raw);
-  const after = await rpc2("tools/list", {}, 8);
-  check("token is refused after disconnect (401 → client re-runs OAuth)", after.status === 401, `got ${after.status}`);
+  check("disconnect (this app) answers", bye.status === 200 && (bye.body?.result?.content?.[0]?.text ?? "").includes("Disconnected this app"), bye.raw);
+  const { result: after, note: afterNote } = await settles(() => rpc2("tools/list", {}, 8), (r) => r.status === 401);
+  check(`that token is refused afterwards (401 → client re-runs OAuth)${afterNote}`, after.status === 401, `got ${after.status}`);
+  const survivor = await rpc("tools/list", {}, 9);
+  check("the other connection on the same key still works (disconnect is per app)", survivor.status === 200, `got ${survivor.status}`);
+
+  // Leave nothing behind: the read-only grant goes too, so smoke runs never
+  // pile up year-long grants on the operator's real key or knock out the
+  // operator's live connections (they did, 2026-09-02).
+  const bye1 = await rpc("tools/call", { name: "disconnect", arguments: {} }, 10);
+  check("cleanup: the read-only connection disconnects itself", bye1.status === 200 && (bye1.body?.result?.content?.[0]?.text ?? "").includes("Disconnected this app"), bye1.raw);
+  const { result: gone, note: goneNote } = await settles(() => rpc("tools/list", {}, 11), (r) => r.status === 401);
+  check(`cleanup: its token is refused afterwards${goneNote}`, gone.status === 401, `got ${gone.status}`);
 
   finish();
 }

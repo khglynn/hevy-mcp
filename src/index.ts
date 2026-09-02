@@ -14,7 +14,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { identifyClient } from "./clients";
 import pages from "./pages";
 import { buildServer, isHevyProps } from "./mcp";
-import { type AppEnv, clientIp, log } from "./util";
+import { type AppEnv, clientIp, log, sha256Hex } from "./util";
 
 const DAY = 24 * 60 * 60;
 
@@ -45,7 +45,16 @@ const api = {
     // the threat Origin validation defends against — does not apply. Without
     // this, agents 0.22.0 allowlists localhost only, and every request that
     // carries an Origin header is 403'd on the custom domain.
-    const handler = createMcpHandler(() => buildServer({ env, props, origin }), {
+    // The provider's access tokens are `userId:grantId:secret`; the token record
+    // is keyed by the token's SHA-256. Both are what `disconnect` needs to
+    // revoke exactly this connection.
+    const bearer = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    const parts = bearer.split(":");
+    const grant =
+      parts.length === 3 && parts[0] === props.hevyUserId
+        ? { id: parts[1], tokenKey: `token:${parts[0]}:${parts[1]}:${await sha256Hex(bearer)}` }
+        : undefined;
+    const handler = createMcpHandler(() => buildServer({ env, props, origin, grant }), {
       route: "/mcp",
       allowedOriginHostnames: "*",
     });

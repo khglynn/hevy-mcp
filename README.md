@@ -20,7 +20,7 @@ Choose **Read only** if you only want Claude to view workouts, routines, and mea
 
 You must set this up on a computer. After that, you can use the connection on your phone. Using ChatGPT, Claude Code, or Cursor? Add the same address in that app.
 
-To leave, tell your assistant **"disconnect from Hevy"**. This disconnects every app using this server and deletes the stored key. You can also revoke the key on Hevy's Developer page. Revoking it makes every stored copy stop working immediately; this server clears its copy the next time an app tries to use it. See [PRIVACY.md](./PRIVACY.md) for what is stored and for how long.
+To leave, tell your assistant **"disconnect from Hevy"**. That removes the connection for the app you said it in; other apps you connected keep working. Say **"disconnect from Hevy everywhere"** to remove every app and delete the stored key. You can also revoke the key on Hevy's Developer page. Revoking it makes every stored copy stop working immediately; this server clears its copy the next time an app tries to use it. See [PRIVACY.md](./PRIVACY.md) for what is stored and for how long.
 
 ## Deploy your own
 
@@ -64,7 +64,7 @@ npm run type-check
 INVITE=<value from .dev.vars> OWNER_TOKEN=<value> HEVY_API_KEY=<your key> npm run test:smoke
 ```
 
-The smoke test runs 48 checks (it prints the count it ran) against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 29 unauthenticated checks, which is what CI runs on every push.
+The smoke test runs 52 checks (it prints the count it ran) against the dev server, including a full OAuth code exchange, a token refresh, MCP `initialize`, `tools/list` for read-only and write grants, one real Hevy call, and revocation. Without `HEVY_API_KEY` it stops after the 32 unauthenticated checks, which is what CI runs on every push.
 
 ## How it works
 
@@ -87,11 +87,12 @@ Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶
 | | Tool | Notes |
 |---|---|---|
 | account | `whoami` | Which Hevy account, which client, read or write |
-| account | `disconnect` | Revokes every grant for this person and forgets the key they connected with |
+| account | `disconnect` | Revokes this app's connection; `everywhere: true` revokes every app on this key and forgets the key |
 | write | `create_body_measurement` | Weights in kg, circumferences in centimetres (field names carry the unit) |
-| read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_exercise_history`, `get_body_measurements` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
+| read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_routine_folder`, `get_exercise_template`, `get_exercise_history`, `get_body_measurements`, `get_body_measurement` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
+| read | `get_workout_events` | Workouts updated or deleted since a date, newest first: the delta feed for keeping a cached copy current without re-reading every page |
 | read | `search_exercise_templates` | Template list cached per user for 6 hours |
-| write | `create_workout`, `update_workout`, `create_routine`, `create_routine_folder`, `create_exercise_template` | `update_workout` is a full overwrite; Hevy has no delete or undo |
+| write | `create_workout`, `update_workout`, `create_routine`, `update_routine`, `create_routine_folder`, `create_exercise_template`, `update_body_measurement` | The `update_*` tools are full overwrites (read first, send back everything you want kept); Hevy has no delete or undo, and no way to edit or delete an exercise template |
 
 ## Clients
 

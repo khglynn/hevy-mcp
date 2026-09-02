@@ -18,6 +18,6 @@ The person running this server could technically read your key while it is in us
 
 ## Leaving
 
-- **Tell your assistant "disconnect from Hevy".** Disconnects every app, deletes the stored key, forgets it.
+- **Tell your assistant "disconnect from Hevy".** Removes that app's connection; other apps you connected keep working. Say "disconnect from Hevy everywhere" to remove every app, delete the stored key, and forget it.
 - **Or revoke the key on [Hevy's Developer page](https://hevy.com/settings?developer).** It stops working everywhere at once; this server drops its copy the next time an app tries to use it.
 - Removing the connection inside Claude does not delete the stored key.

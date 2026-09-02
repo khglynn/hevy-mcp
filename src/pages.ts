@@ -22,7 +22,8 @@ import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
 import { type Context, Hono } from "hono";
 import { html } from "hono/html";
 import { type ClientLabel, describeClient, identifyClient } from "./clients";
-import { faviconPngBytes } from "./favicon";
+import { FAVICON_SIZE, faviconPngBytes } from "./favicon";
+import { OG_HEIGHT, OG_WIDTH, ogPngBytes } from "./og-image";
 import { HevyError, validateHevyKey } from "./hevy";
 import { PROPS_VERSION } from "./mcp";
 import {
@@ -61,17 +62,40 @@ app.use("*", async (c, next) => {
     "Content-Security-Policy",
     `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'`,
   );
-  if (!c.req.path.startsWith("/favicon")) c.header("Cache-Control", "no-store");
+  if (!STATIC_PATHS.has(c.req.path)) c.header("Cache-Control", "no-store");
 });
 
+/** Images that may be cached; every page is no-store. */
+const STATIC_PATHS = new Set(["/favicon.png", "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png", "/og.png"]);
+
 // ---------- layout ----------
-const layout = (body: unknown, title: string, page: string) => html`<!doctype html>
+/** Link-preview tags for pages people paste into chats. The image URL must be absolute, so the origin is required. */
+interface ShareMeta {
+  origin: string;
+  description: string;
+}
+
+const shareTags = (title: string, share: ShareMeta) => html`<meta property="og:type" content="website" />
+      <meta property="og:site_name" content="${new URL(share.origin).host}" />
+      <meta property="og:title" content="${title}" />
+      <meta property="og:description" content="${share.description}" />
+      <meta property="og:image" content="${share.origin}/og.png" />
+      <meta property="og:image:width" content="${OG_WIDTH}" />
+      <meta property="og:image:height" content="${OG_HEIGHT}" />
+      <meta property="og:image:alt" content="${title}" />
+      <meta name="twitter:card" content="summary_large_image" />
+      <meta name="description" content="${share.description}" />`;
+
+const layout = (body: unknown, title: string, page: string, share?: ShareMeta) => html`<!doctype html>
   <html lang="en">
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <meta name="theme-color" content="#0b0d11" />
       <title>${title}</title>
-      <link rel="icon" href="/favicon.png" type="image/png" />
+      <link rel="icon" href="/favicon.png" type="image/png" sizes="${FAVICON_SIZE}x${FAVICON_SIZE}" />
+      <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+      ${share ? shareTags(title, share) : ""}
       <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
       <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&family=Barlow:wght@400;500;600&display=swap" />
       <style>
@@ -170,6 +194,15 @@ app.get("/favicon.png", (c) =>
 app.get("/favicon.ico", (c) =>
   c.body(faviconPngBytes(), 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" }),
 );
+app.get("/apple-touch-icon.png", (c) =>
+  c.body(faviconPngBytes(), 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" }),
+);
+app.get("/apple-touch-icon-precomposed.png", (c) =>
+  c.body(faviconPngBytes(), 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" }),
+);
+app.get("/og.png", (c) =>
+  c.body(ogPngBytes(), 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" }),
+);
 
 // ---------- /start — the link the operator sends ----------
 function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string, tip: string | null, nonce: string) {
@@ -225,6 +258,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator:
       </script>`,
     "Connect Hevy to Claude",
     "start",
+    { origin, description: "Build routines, log workouts, and pull your whole Hevy history into any AI assistant. Bring your own Hevy API key." },
   );
 }
 
@@ -271,6 +305,7 @@ app.get("/privacy", (c) => {
         </section>`,
       "What this server keeps",
       "privacy",
+      { origin: new URL(c.req.url).origin, description: "Your Hevy API key, encrypted per connection, nothing else. What this server stores, for how long, and how to leave." },
     ),
   );
 });
@@ -331,6 +366,7 @@ function connectPage(o: ConnectPageOpts) {
       </script>`,
     `Connect Hevy to ${o.client}`,
     "connect",
+    { origin: o.origin, description: "Paste your Hevy API key, choose read-only or read + write, and you're connected." },
   );
 }
 
@@ -520,6 +556,13 @@ app.post("/approve", async (c) => {
     metadata: { name: user.name, client, canWrite, connectedAt: now, keyFingerprint: fingerprint },
     scope: req.scope,
     props: { v: PROPS_VERSION, hevyApiKey: key, keyFingerprint: fingerprint, hevyUserId: userId, name: user.name, canWrite, client },
+    // The library default revokes this person's earlier grants for the same
+    // client id + redirect URI. Claude.ai is ONE client id for every claude.ai
+    // account, so with the default a second claude.ai account connecting the
+    // same Hevy key silently logged the first one out (Worker logs, 2026-09-02:
+    // 401, refresh 400, "Authentication required"). Every connection is its
+    // own grant; stale ones expire with their refresh token.
+    revokeExistingGrants: false,
   });
   await Promise.all([
     c.env.OAUTH_KV.put(

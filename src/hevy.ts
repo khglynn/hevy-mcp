@@ -217,4 +217,23 @@ export class HevyClient {
   createBodyMeasurement(measurement: unknown) {
     return this.request("POST", "/body_measurements", { body: measurement });
   }
+  getBodyMeasurement(date: string) {
+    return this.request("GET", `/body_measurements/${encodeURIComponent(date)}`);
+  }
+  updateBodyMeasurement(date: string, measurement: unknown) {
+    return this.request("PUT", `/body_measurements/${encodeURIComponent(date)}`, { body: measurement });
+  }
+  getRoutineFolder(id: number | string) {
+    return this.request("GET", `/routine_folders/${encodeURIComponent(String(id))}`);
+  }
+  getExerciseTemplate(id: string) {
+    return this.request("GET", `/exercise_templates/${encodeURIComponent(id)}`);
+  }
+  /** Workout changes (updated / deleted) since a date, newest first — the delta feed for a cached copy. */
+  getWorkoutEvents(query: { since?: string; page?: number; pageSize?: number }) {
+    return this.request("GET", "/workouts/events", { query });
+  }
+  updateRoutine(id: string, routine: unknown) {
+    return this.request("PUT", `/routines/${encodeURIComponent(id)}`, { body: { routine } });
+  }
 }

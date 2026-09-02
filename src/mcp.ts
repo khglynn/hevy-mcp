@@ -15,7 +15,7 @@
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { FAVICON_DATA_URI } from "./favicon";
+import { FAVICON_DATA_URI, FAVICON_SIZE } from "./favicon";
 import { HevyClient, HevyError, validateHevyKey } from "./hevy";
 import { type AppEnv, log, memberKeyFor, operatorName, revokeAllGrants } from "./util";
 
@@ -51,6 +51,14 @@ export interface ToolContext {
   env: AppEnv;
   props: HevyProps;
   origin: string;
+  /**
+   * The grant behind this request's bearer token, read off the token itself
+   * (`userId:grantId:secret`, the provider's format) plus the KV key of the
+   * token record that authorised this call. Lets `disconnect` revoke exactly
+   * this connection without a KV list, which is eventually consistent in
+   * production and can miss a grant created moments ago.
+   */
+  grant?: { id: string; tokenKey: string };
 }
 
 const TEMPLATE_CACHE_TTL = 6 * 60 * 60;
@@ -260,9 +268,9 @@ const routineExercise = z.object({
 export function buildServer(ctx: ToolContext): McpServer {
   const server = new McpServer({
     name: "hevy-mcp",
-    version: "0.2.0",
+    version: "0.3.0",
     title: "Hevy",
-    icons: [{ src: FAVICON_DATA_URI, mimeType: "image/png", sizes: ["128x128"] }],
+    icons: [{ src: FAVICON_DATA_URI, mimeType: "image/png", sizes: [`${FAVICON_SIZE}x${FAVICON_SIZE}`] }],
   });
 
   // ===== account =====
@@ -286,18 +294,33 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "disconnect",
-    "Disconnect this Hevy account from every app using this server and delete the stored key. Ask the person before doing this.",
-    {},
-    async () => {
+    "Disconnect this app from Hevy. Revokes this connection only; other apps using the same key keep working. Pass everywhere=true to disconnect every app that uses this key and delete the stored key. Ask the person before doing this.",
+    {
+      everywhere: z.boolean().optional().describe("true: disconnect every app using this key and delete the stored key. Default: only this app."),
+    },
+    async ({ everywhere }) => {
+      if (!everywhere && ctx.grant) {
+        // This call's own token record first (a direct delete, so it is gone
+        // at the origin right away), then the grant, which also removes the
+        // refresh token and lists the grant's other access tokens (best
+        // effort). The edge cache can still honour the old token for up to a
+        // minute; nothing renews it after that.
+        await ctx.env.OAUTH_KV.delete(ctx.grant.tokenKey);
+        await ctx.env.OAUTH_PROVIDER.revokeGrant(ctx.grant.id, ctx.props.hevyUserId);
+        log("user.disconnected", { userId: ctx.props.hevyUserId, scope: "app", client: ctx.props.client });
+        return `Disconnected this app. Other apps connected with the same key keep working; ask to "disconnect from Hevy everywhere" to remove them all. Reconnect anytime: ${ctx.origin}/start`;
+      }
+      // Asked for everywhere, or a bearer this server could not tie to one grant.
       const revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
       await Promise.all([
         ctx.env.OAUTH_KV.delete(`member:${ctx.props.hevyUserId}`),
         ctx.env.OAUTH_KV.delete(await memberKeyFor(ctx.props.hevyApiKey)),
         ctx.env.OAUTH_KV.delete(`tplcache:${ctx.props.hevyUserId}`),
       ]);
-      log("user.disconnected", { userId: ctx.props.hevyUserId, revoked });
+      log("user.disconnected", { userId: ctx.props.hevyUserId, revoked, scope: "everywhere", unresolvedGrant: !ctx.grant });
+      const legacyNote = everywhere ? "" : " (This connection could not be matched to one app, so every app was removed.)";
       const inviteNote = ctx.env.MCP_INVITE_CODE ? " You will need an invite link to reconnect." : "";
-      return `Disconnected. Removed ${revoked} app connection(s). This server deleted the stored key and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
+      return `Disconnected everywhere. Removed ${revoked} app connection(s).${legacyNote} This server deleted the stored key and forgot it.${inviteNote} To stop the key everywhere, also revoke it on Hevy's Developer page: https://hevy.com/settings?developer. Reconnect anytime: ${ctx.origin}/start`;
     },
   );
 
@@ -354,6 +377,24 @@ export function buildServer(ctx: ToolContext): McpServer {
   reg(
     server,
     ctx,
+    "get_routine_folder",
+    "Get a single routine folder by its id.",
+    { folderId: z.coerce.number().int().describe("The folder id (a number, from get_routine_folders or a routine's folder_id).") },
+    ({ folderId }, hevy) => hevy.getRoutineFolder(folderId),
+  );
+
+  reg(
+    server,
+    ctx,
+    "get_exercise_template",
+    "Get one exercise template by its id: name, type, equipment, muscle groups, and whether it is custom.",
+    { exerciseTemplateId: z.string().describe("Exercise template id, from search_exercise_templates or a workout's exercises.") },
+    ({ exerciseTemplateId }, hevy) => hevy.getExerciseTemplate(exerciseTemplateId),
+  );
+
+  reg(
+    server,
+    ctx,
     "get_routine_folders",
     "List routine folders (used to organize routines), paginated.",
     { page, pageSize },
@@ -402,10 +443,32 @@ export function buildServer(ctx: ToolContext): McpServer {
   reg(
     server,
     ctx,
+    "get_workout_events",
+    'List workout changes (updated or deleted) since a date, newest first, so a cached copy of someone\'s workouts can be brought up to date without re-reading every page. Each event is { type: "updated", workout } or { type: "deleted", id, deleted_at }.',
+    {
+      since: z.string().optional().describe("ISO 8601 date-time, e.g. 2026-08-01T00:00:00Z. Default: the beginning of time, which lists every workout as an 'updated' event."),
+      page,
+      pageSize: z.number().int().min(1).max(10).optional().describe("Events per page (default 5, max 10)."),
+    },
+    ({ since, page, pageSize }, hevy) => hevy.getWorkoutEvents({ since, page: page ?? 1, pageSize: pageSize ?? 5 }),
+  );
+
+  reg(
+    server,
+    ctx,
     "get_body_measurements",
     "List body-measurement entries (weight, body fat, circumferences), paginated.",
     { page, pageSize },
     ({ page, pageSize }, hevy) => hevy.getBodyMeasurements({ page: page ?? 1, pageSize: pageSize ?? 10 }),
+  );
+
+  reg(
+    server,
+    ctx,
+    "get_body_measurement",
+    "Get the body-measurement entry for one date (YYYY-MM-DD).",
+    { date: z.string().describe("YYYY-MM-DD") },
+    ({ date }, hevy) => hevy.getBodyMeasurement(date),
   );
 
   if (!ctx.props.canWrite) return server;
@@ -456,6 +519,21 @@ export function buildServer(ctx: ToolContext): McpServer {
       exercises: z.array(routineExercise),
     },
     (r, hevy) => hevy.createRoutine(r),
+  );
+
+  reg(
+    server,
+    ctx,
+    "update_routine",
+    "Replace an existing routine's contents: title, folder, notes, exercises and their sets. Hevy has no undo and no partial update, so exercises you leave out are gone. Read the routine with get_routine first and send back everything you want kept.",
+    {
+      routineId: z.string().describe("The routine id (UUID)."),
+      title: z.string(),
+      folder_id: z.number().nullable().optional().describe("Folder id, or null for the default 'My Routines' folder."),
+      notes: z.string().nullable().optional(),
+      exercises: z.array(routineExercise),
+    },
+    ({ routineId, ...routine }, hevy) => hevy.updateRoutine(routineId, routine),
   );
 
   reg(
@@ -515,6 +593,45 @@ export function buildServer(ctx: ToolContext): McpServer {
     ({ abdomen_cm, waist_cm, hips_cm, left_thigh_cm, right_thigh_cm, left_calf_cm, right_calf_cm, ...rest }, hevy) =>
       // Hevy's wire format leaves these seven unsuffixed; the model-facing names carry the unit.
       hevy.createBodyMeasurement({
+        ...rest,
+        abdomen: abdomen_cm,
+        waist: waist_cm,
+        hips: hips_cm,
+        left_thigh: left_thigh_cm,
+        right_thigh: right_thigh_cm,
+        left_calf: left_calf_cm,
+        right_calf: right_calf_cm,
+      }),
+  );
+
+  reg(
+    server,
+    ctx,
+    "update_body_measurement",
+    "Overwrite the body-measurement entry for a date (YYYY-MM-DD). Every field is replaced and fields you omit become empty, so read the entry first (get_body_measurement) and send back everything you want kept. Fails with 404 when no entry exists for that date; use create_body_measurement for a new date.",
+    {
+      date: z.string().describe("YYYY-MM-DD"),
+      weight_kg: z.number().nullable().optional().describe("Body weight, in kilograms."),
+      lean_mass_kg: z.number().nullable().optional().describe("Lean mass, in kilograms."),
+      fat_percent: z.number().nullable().optional().describe("Body fat, percent."),
+      neck_cm: cm("Neck"),
+      shoulder_cm: cm("Shoulders"),
+      chest_cm: cm("Chest"),
+      left_bicep_cm: cm("Left bicep"),
+      right_bicep_cm: cm("Right bicep"),
+      left_forearm_cm: cm("Left forearm"),
+      right_forearm_cm: cm("Right forearm"),
+      abdomen_cm: cm("Abdomen"),
+      waist_cm: cm("Waist"),
+      hips_cm: cm("Hips"),
+      left_thigh_cm: cm("Left thigh"),
+      right_thigh_cm: cm("Right thigh"),
+      left_calf_cm: cm("Left calf"),
+      right_calf_cm: cm("Right calf"),
+    },
+    ({ date, abdomen_cm, waist_cm, hips_cm, left_thigh_cm, right_thigh_cm, left_calf_cm, right_calf_cm, ...rest }, hevy) =>
+      // Hevy's wire format leaves these seven unsuffixed; the model-facing names carry the unit.
+      hevy.updateBodyMeasurement(date, {
         ...rest,
         abdomen: abdomen_cm,
         waist: waist_cm,
