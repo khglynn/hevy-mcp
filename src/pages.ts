@@ -6,9 +6,10 @@
  * and completes the grant.
  *
  * Order of checks on /approve is deliberate: throttle → known client → invite
- * → key shape → Hevy → membership. Hevy is only asked about a key when the
- * caller has an invite or is a returning member, and failures are counted, so
- * the page cannot be used as a free "is this Hevy key valid?" oracle.
+ * configured → key shape → invite (or a key this server has seen before) →
+ * Hevy → membership. Hevy is only asked about a key when the caller holds the
+ * invite or presents a key that connected before, and failures are counted,
+ * so the page cannot be used as a free "is this Hevy key valid?" oracle.
  */
 
 import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
@@ -18,7 +19,7 @@ import { type ClientLabel, describeClient, identifyClient } from "./clients";
 import { faviconPngBytes } from "./favicon";
 import { HevyError, validateHevyKey } from "./hevy";
 import { PROPS_VERSION } from "./mcp";
-import { type AppEnv, UUID_RE, clientIp, constantTimeEqual, cookie, deriveUserId, getCookie, log } from "./util";
+import { type AppEnv, UUID_RE, clientIp, constantTimeEqual, cookie, deriveUserId, getCookie, log, memberKeyFor, operatorName } from "./util";
 
 const app = new Hono<{ Bindings: AppEnv }>();
 
@@ -101,12 +102,12 @@ app.get("/favicon.ico", (c) =>
 );
 
 // ---------- /start — the link Kevin sends ----------
-function startPage(origin: string, inviteState: "ok" | "bad" | "none") {
+function startPage(origin: string, inviteState: "ok" | "bad" | "none", operator: string) {
   return layout(
     html`<h1>Connect Hevy to Claude</h1>
       <p>Ask Claude about your actual training — what you lifted last week, what to do next — and log sessions without typing them twice.</p>
       ${inviteState === "ok" ? html`<div class="ok">Invite saved in this browser. You're good to connect.</div>` : ""}
-      ${inviteState === "bad" ? html`<div class="err">That invite link isn't right. Check the message Kevin sent you and open the link exactly as it was sent.</div>` : ""}
+      ${inviteState === "bad" ? html`<div class="err">That invite link isn't right. Check the message you were sent and open the link exactly as it was sent.</div>` : ""}
       <div id="mobile" class="note">You'll need a computer for these steps — Hevy's key page and Claude's connector settings are both desktop-only. Email yourself this link.</div>
 
       <h2>Two things you need, both on a computer</h2>
@@ -124,7 +125,7 @@ function startPage(origin: string, inviteState: "ok" | "bad" | "none") {
       <p>A page opens asking for your key. Paste it, choose whether Claude may add and edit workouts, and you're connected.</p>
 
       <h2>What happens to your key</h2>
-      <p class="muted">This runs on Kevin's own server on Cloudflare. Your key is stored encrypted and used only to talk to Hevy for you. Kevin operates the server and could technically read it. To cut it off instantly, rotate the key at Hevy — or ask Claude to "disconnect from Hevy". <a href="/privacy">What's stored and for how long →</a></p>
+      <p class="muted">This runs on a server operated by ${operator}, on Cloudflare. Your key is stored encrypted and used only to talk to Hevy for you. ${operator} could technically read it. To cut it off instantly, rotate the key at Hevy — or ask Claude to "disconnect from Hevy". <a href="/privacy">What's stored and for how long →</a></p>
       <script>
         (function () {
           var b = document.getElementById("copy"), u = document.getElementById("mcpurl");
@@ -154,32 +155,33 @@ function handleStart(c: Context<{ Bindings: AppEnv }>) {
       log("start.bad_invite", {});
     }
   }
-  return c.html(startPage(origin, state));
+  return c.html(startPage(origin, state, operatorName(c.env)));
 }
 
 // ---------- /privacy ----------
-app.get("/privacy", (c) =>
-  c.html(
+app.get("/privacy", (c) => {
+  const operator = operatorName(c.env);
+  return c.html(
     layout(
       html`<h1>What this server stores</h1>
-        <p><b>Your Hevy API key.</b> Encrypted inside the OAuth grant your client holds, in Cloudflare KV. The encryption key is derived from your client's token, so the stored copy is unreadable without it. The key is decrypted only for the moment a request from your client is served; it is never written anywhere else and never logged.</p>
-        <p><b>Your Hevy display name and user id</b> (the id hashed), so the owner can see who is connected, plus the date you connected and which app connected (Claude, ChatGPT, Claude Code).</p>
-        <p><b>Nothing from your workouts.</b> Requests go straight to Hevy and back; no workout, routine or measurement data is kept here. A list of exercise names is cached for a few hours to spare Hevy repeated lookups.</p>
+        <p><b>Your Hevy API key.</b> Encrypted inside the OAuth grant your client holds, in Cloudflare KV. The encryption key is derived from your client's token, so the stored copy is unreadable without it. The key is decrypted only for the moment a request from your client is served; it is never written anywhere else and never logged (logs redact anything shaped like a key).</p>
+        <p><b>Your Hevy display name, a hash of your Hevy user id, and a hash of your key</b>, so the operator can see who is connected and so you can reconnect later without a fresh invite, plus the date you connected and which app connected (Claude, ChatGPT, Claude Code, Cursor).</p>
+        <p><b>Nothing from your workouts.</b> Requests go straight to Hevy and back; no workout, routine or measurement data is kept here. A copy of your exercise list — Hevy's built-ins plus any custom exercises you've made — is cached unencrypted for six hours per person to spare Hevy repeated lookups.</p>
         <h2>How long</h2>
-        <p>Access tokens last 7 days and are refreshed silently by your client; a refresh token lasts 180 days from its last use. After six months of no use the grant expires and the stored key goes with it.</p>
+        <p>Access tokens last 7 days and are refreshed silently by your client. The connection itself lasts a year from the day you connect, however often you use it; after that Claude asks you to paste your Hevy key again, and the stored key is gone with the expired connection. Save your key somewhere you can find it. The record that your account has connected before (name, hashed id, hashed key, dates) stays until you disconnect.</p>
         <h2>Who can read it</h2>
-        <p>Kevin operates this server on his own Cloudflare account and could technically read a key while a request is in flight. Nobody else can. There is no support promise; the Hevy API itself is unofficial and Hevy says it may change or withdraw it.</p>
+        <p>${operator} operates this server on a personal Cloudflare account and could technically read a key while a request is in flight. Nobody else can. There is no support promise; the Hevy API itself is unofficial and Hevy says it may change or withdraw it.</p>
         <h2>Leaving</h2>
         <ul>
-          <li>Ask Claude to <b>"disconnect from Hevy"</b> — this revokes every connection and deletes the stored key with it.</li>
-          <li>Rotate your key at <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener noreferrer">hevy.com/settings?developer</a> — that cuts off this server and anything else holding the old key, instantly.</li>
+          <li>Ask Claude to <b>"disconnect from Hevy"</b> — this revokes every connection, deletes the stored key, and forgets that you ever connected.</li>
+          <li>Rotate your key at <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener noreferrer">hevy.com/settings?developer</a> — that instantly makes the stored copy useless to this server and anything else holding the old key; it is cleared the next time anything tries to use it.</li>
           <li>Removing the connector in Claude alone does not delete the stored key; use one of the two steps above.</li>
         </ul>
         <p class="muted"><a href="/start">← Back</a></p>`,
       "Hevy MCP — what's stored",
     ),
-  ),
-);
+  );
+});
 
 // ---------- /authorize — the OAuth consent step ----------
 interface ConnectPageOpts {
@@ -187,6 +189,7 @@ interface ConnectPageOpts {
   client: ClientLabel;
   req: AuthRequest;
   showInvite: boolean;
+  operator: string;
   error?: string;
   canWrite?: boolean;
 }
@@ -208,13 +211,13 @@ function connectPage(o: ConnectPageOpts) {
         ${o.showInvite
           ? html`<label for="invite">Invite code</label>
               <input type="text" id="invite" name="invite" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
-              <p class="muted" style="margin-top:.4rem">From the link Kevin sent you. Opening that link in this browser fills this in for you. Returning? Leave it blank.</p>`
+              <p class="muted" style="margin-top:.4rem">From the invite link you were sent. Opening that link in this browser fills this in for you. Connected before with this key? Leave it blank.</p>`
           : ""}
         <label class="check"><input type="checkbox" name="can_write" ${o.canWrite ? "checked" : ""} />
           <span>Let Claude add and edit workouts, routines and measurements.<br /><span class="muted">Leave off for read-only — Claude can look, not touch. Heads up: Hevy has no undo. Edits Claude makes to a saved workout replace what was there.</span></span></label>
         <button type="submit" class="btn" id="submit">Connect</button>
       </form>
-      <p class="muted" style="margin-top:1rem">Your key is stored encrypted on Kevin's server and used only to call Hevy on your behalf. Kevin could technically read it. Leave any time by asking Claude to "disconnect from Hevy" or rotating the key at Hevy. <a href="/privacy">Details →</a></p>
+      <p class="muted" style="margin-top:1rem">Your key is stored encrypted on a server run by ${o.operator} and used only to call Hevy on your behalf. ${o.operator} could technically read it. Leave any time by asking Claude to "disconnect from Hevy" or rotating the key at Hevy. <a href="/privacy">Details →</a></p>
       <script>
         (function () {
           var i = document.getElementById("hevy_key"), t = document.getElementById("toggle"), f = document.getElementById("f"), s = document.getElementById("submit");
@@ -235,10 +238,10 @@ const expiredPage = () =>
     "Hevy MCP",
   );
 
-const refusalPage = () =>
+const refusalPage = (operator: string) =>
   layout(
-    html`<h1>This connector only works with Claude and ChatGPT</h1>
-      <p>The app asking for access isn't one this server recognises, so it won't show the key form. If you're using Claude, ChatGPT, Claude Code or Cursor and see this, tell Kevin.</p>`,
+    html`<h1>This connector doesn't recognise that app</h1>
+      <p>The app asking for access isn't one this server recognises, so it won't show the key form. It works with Claude, ChatGPT, Claude Code and Cursor. If you're using one of those and see this, tell ${operator}.</p>`,
     "Hevy MCP",
   );
 
@@ -254,11 +257,11 @@ app.get("/authorize", async (c) => {
   const client = identifyClient(req.redirectUri);
   if (!client) {
     log("authorize.unknown_client", { clientId: req.clientId, redirectUri: req.redirectUri });
-    return c.html(refusalPage(), 403);
+    return c.html(refusalPage(operatorName(c.env)), 403);
   }
   const inviteCookie = getCookie(c.req.raw, INVITE_COOKIE);
   const haveInvite = !!(c.env.MCP_INVITE_CODE && inviteCookie && constantTimeEqual(inviteCookie, c.env.MCP_INVITE_CODE));
-  return c.html(connectPage({ origin, client, req, showInvite: !haveInvite }));
+  return c.html(connectPage({ origin, client, req, showInvite: !haveInvite, operator: operatorName(c.env) }));
 });
 
 // ---------- /approve — validate, then complete the grant ----------
@@ -305,7 +308,7 @@ app.post("/approve", async (c) => {
     return c.html(
       layout(
         html`<h1>Too many tries from your network</h1>
-          <p>Give it a minute, then try again. If you've pasted the key a few times and it keeps failing, text Kevin — something's wrong on our end.</p>`,
+          <p>Give it a minute, then try again. If you've pasted the key a few times and it keeps failing, tell ${operatorName(c.env)} — something's wrong on our end.</p>`,
         "Hevy MCP",
       ),
       429,
@@ -324,14 +327,14 @@ app.post("/approve", async (c) => {
   const client = identifyClient(req.redirectUri);
   if (!client) {
     log("approve.unknown_client", { clientId: req.clientId, redirectUri: req.redirectUri });
-    return c.html(refusalPage(), 403);
+    return c.html(refusalPage(operatorName(c.env)), 403);
   }
 
   // Fail CLOSED: with no invite configured, nobody connects.
   if (!c.env.MCP_INVITE_CODE) {
     log("approve.no_invite_configured", {});
     return c.html(
-      layout(html`<h1>Not accepting connections right now</h1><p>The server isn't fully configured. Tell Kevin.</p>`, "Hevy MCP"),
+      layout(html`<h1>Not accepting connections right now</h1><p>The server isn't fully configured. Tell ${operatorName(c.env)}.</p>`, "Hevy MCP"),
       503,
     );
   }
@@ -342,7 +345,7 @@ app.post("/approve", async (c) => {
   const inviteOk = inviteSubmitted.length > 0 && constantTimeEqual(inviteSubmitted, c.env.MCP_INVITE_CODE);
 
   const again = (error: string, status: 400 | 401 | 403) =>
-    c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: !inviteOk, error, canWrite }), status);
+    c.html(connectPage({ origin, client, req: req as AuthRequest, showInvite: !inviteOk, operator: operatorName(c.env), error, canWrite }), status);
 
   if (!UUID_RE.test(key)) {
     return again(
@@ -354,7 +357,20 @@ app.post("/approve", async (c) => {
   if (!inviteOk && inviteSubmitted.length > 0) {
     await bumpFails(c.env, failKey);
     log("approve.bad_invite", { client });
-    return again("That invite code isn't right. Check the message Kevin sent you, or open the link in it.", 403);
+    return again("That invite code isn't right. Check the message you were sent, or open the link in it.", 403);
+  }
+
+  // No invite: only a key this server has seen before gets as far as Hevy.
+  // Decided from a hash of the key, so a stranger cannot use this page to ask
+  // Hevy whether an arbitrary key is valid.
+  const memberKey = await memberKeyFor(key);
+  if (!inviteOk) {
+    const seenBefore = await c.env.OAUTH_KV.get(memberKey);
+    if (!seenBefore) {
+      await bumpFails(c.env, failKey);
+      log("approve.invite_missing", { client });
+      return again("This server is invite-only. Open the invite link you were sent first (it remembers the invite in this browser), then come back and connect. If you connected before with a different key, you need the link again.", 403);
+    }
   }
 
   // Ask Hevy who owns the key. A 401 means the key is bad, full stop.
@@ -369,15 +385,8 @@ app.post("/approve", async (c) => {
   }
 
   const userId = await deriveUserId(user.id);
-  const memberKey = `member:${userId}`;
-  const existing = await c.env.OAUTH_KV.get<{ firstConnectedAt?: string }>(memberKey, "json");
-
-  // No invite: only someone who has connected before may proceed.
-  if (!inviteOk && !existing) {
-    await bumpFails(c.env, failKey);
-    log("approve.invite_missing", { client });
-    return again("This server is invite-only. Open the link Kevin sent you first (it remembers the invite in this browser), then come back and connect.", 403);
-  }
+  const memberRecordKey = `member:${userId}`;
+  const existing = await c.env.OAUTH_KV.get<{ firstConnectedAt?: string }>(memberRecordKey, "json");
 
   const now = new Date().toISOString();
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization({
@@ -387,10 +396,13 @@ app.post("/approve", async (c) => {
     scope: req.scope,
     props: { v: PROPS_VERSION, hevyApiKey: key, hevyUserId: userId, name: user.name, canWrite, client },
   });
-  await c.env.OAUTH_KV.put(
-    memberKey,
-    JSON.stringify({ name: user.name, firstConnectedAt: existing?.firstConnectedAt ?? now, lastConnectedAt: now }),
-  );
+  await Promise.all([
+    c.env.OAUTH_KV.put(
+      memberRecordKey,
+      JSON.stringify({ name: user.name, firstConnectedAt: existing?.firstConnectedAt ?? now, lastConnectedAt: now }),
+    ),
+    c.env.OAUTH_KV.put(memberKey, userId),
+  ]);
   log("approve.connected", { userId, client, canWrite, returning: !!existing });
   return c.html(successPage(user.name, redirectTo, canWrite));
 });

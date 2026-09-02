@@ -3,6 +3,11 @@ name: canary
 # Weekly "is it up" check against production. Unauthenticated on purpose: it
 # proves discovery, the OAuth challenge and the start page, which is what a
 # new person hits first. A failure emails the repo owner.
+#
+# Set the repository variable CANARY_BASE to your deployed origin (e.g.
+# https://hevy.example.com). Note: GitHub disables scheduled workflows after
+# 60 days without a commit — if this repo goes quiet, re-enable it from the
+# Actions tab or run it by hand (workflow_dispatch stays available).
 
 on:
   schedule:
@@ -14,8 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      BASE: https://hevy.kevinhg.com
+      BASE: ${{ vars.CANARY_BASE }}
     steps:
+      - name: CANARY_BASE is set
+        run: test -n "$BASE" || { echo "Set the repository variable CANARY_BASE to your deployed origin"; exit 1; }
       - name: Discovery advertises S256-only PKCE and CIMD
         run: |
           meta=$(curl -sf --max-time 20 "$BASE/.well-known/oauth-authorization-server")

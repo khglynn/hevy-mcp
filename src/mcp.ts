@@ -17,7 +17,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { FAVICON_DATA_URI } from "./favicon";
 import { HevyClient, HevyError } from "./hevy";
-import { type AppEnv, log, revokeAllGrants } from "./util";
+import { type AppEnv, log, memberKeyFor, revokeAllGrants } from "./util";
 
 export const PROPS_VERSION = 2;
 
@@ -243,12 +243,17 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "disconnect",
-    "Disconnect this Hevy account from the server: revokes every grant for this person so no client can use the stored key. Ask before calling this.",
+    "Disconnect this Hevy account from the server: revokes every grant for this person and forgets that they ever connected, so no client can use the stored key. Ask before calling this.",
     {},
     async () => {
       const revoked = await revokeAllGrants(ctx.env, ctx.props.hevyUserId);
+      await Promise.all([
+        ctx.env.OAUTH_KV.delete(`member:${ctx.props.hevyUserId}`),
+        ctx.env.OAUTH_KV.delete(await memberKeyFor(ctx.props.hevyApiKey)),
+        ctx.env.OAUTH_KV.delete(`tplcache:${ctx.props.hevyUserId}`),
+      ]);
       log("user.disconnected", { userId: ctx.props.hevyUserId, revoked });
-      return `Disconnected. ${revoked} connection(s) revoked; the stored key is gone with them. To cut Hevy access at the source too, rotate the key at hevy.com/settings?developer. Reconnect any time: ${ctx.origin}/start`;
+      return `Disconnected. ${revoked} connection(s) revoked and the stored key is gone with them; this server has also forgotten that you connected, so reconnecting needs an invite link again. To cut Hevy access at the source too, rotate the key at hevy.com/settings?developer. Reconnect any time: ${ctx.origin}/start`;
     },
   );
 

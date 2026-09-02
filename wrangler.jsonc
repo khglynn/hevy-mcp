@@ -10,8 +10,10 @@
  *                     /admin is a 404 when unset.
  *
  * Deploying to your own account: replace the KV namespace id below with the
- * one `wrangler kv namespace create OAUTH_KV` prints, and change or drop the
- * custom-domain route.
+ * one `wrangler kv namespace create OAUTH_KV` prints, change or drop the
+ * custom-domain route, set OPERATOR_NAME to yourself, and delete the
+ * `migrations` block entirely — it is this deployment's history (a Durable
+ * Object that no longer exists) and a fresh Worker does not need it.
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
@@ -28,6 +30,8 @@
     { "tag": "v1", "new_sqlite_classes": ["HevyMCP"] },
     { "tag": "v2", "deleted_classes": ["HevyMCP"] }
   ],
+  // Named on the connect and privacy pages ("... a server run by X"). Not a secret.
+  "vars": { "OPERATOR_NAME": "Kevin" },
   "kv_namespaces": [
     {
       "binding": "OAUTH_KV",

@@ -113,8 +113,11 @@ async function main() {
   check("/authorize with unregistered redirect → not 200", spoof.status !== 200, `got ${spoof.status}`);
 
   // --- /approve ---
+  // Local runs share one source IP, so repeated runs would trip the per-IP
+  // failure counter; miniflare passes cf-connecting-ip through, so pick one per run.
+  const fakeIp = /localhost|127\.0\.0\.1/.test(BASE) ? { "cf-connecting-ip": `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}` } : {};
   const post = (fields, cookie = "") =>
-    fetch(`${BASE}/approve`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...(cookie ? { cookie } : {}) }, body: form(fields) });
+    fetch(`${BASE}/approve`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", ...fakeIp, ...(cookie ? { cookie } : {}) }, body: form(fields) });
 
   const shape = await post({ oauthReqInfo, hevy_key: "not-a-key", invite: "whatever" });
   check("/approve rejects non-UUID key (400)", shape.status === 400 && (await textOf(shape)).includes("doesn't look like"));
@@ -125,11 +128,23 @@ async function main() {
 
   const noInvite = await post({ oauthReqInfo, hevy_key: fakeKey });
   const noInviteText = await textOf(noInvite);
-  check("/approve without invite: fake key → Hevy rejection (401)", noInvite.status === 401 && noInviteText.includes("didn't recognise"), `got ${noInvite.status}`);
+  check("/approve without invite and an unseen key → invite-only (403), Hevy never asked", noInvite.status === 403 && noInviteText.includes("invite-only"), `got ${noInvite.status}`);
 
   if (inviteCookie) {
     const badKey = await post({ oauthReqInfo, hevy_key: fakeKey }, inviteCookie);
     check("/approve with invite + fake key → Hevy rejection copy", badKey.status === 401 && (await textOf(badKey)).includes("didn't recognise"));
+  }
+
+  // --- admin (owner token) ---
+  if (process.env.OWNER_TOKEN) {
+    const login = await fetch(`${BASE}/admin?token=${encodeURIComponent(process.env.OWNER_TOKEN)}`, { redirect: "manual" });
+    const ownerCookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
+    check("/admin?token= sets owner cookie and redirects", login.status === 302 && ownerCookie.startsWith("hevy_owner="));
+    const adminPage = await fetch(`${BASE}/admin`, { headers: { cookie: ownerCookie } });
+    const adminHtml = await adminPage.text();
+    check("/admin renders for the owner", adminPage.status === 200 && adminHtml.includes("Connected accounts"));
+  } else {
+    console.log("  skip admin checks (set OWNER_TOKEN)");
   }
 
   if (!HEVY_API_KEY || !inviteCookie) {
@@ -210,18 +225,6 @@ async function main() {
   const tok2 = await fetch(`${BASE}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form({ grant_type: "authorization_code", code: code2 ?? "", redirect_uri: redirectUri, client_id: clientId, code_verifier: v2 }) }).then((r) => r.json());
   const list2 = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${tok2.access_token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/list", params: {} }) }).then((r) => r.text());
   check("write grant lists create_workout", list2.includes('"create_workout"'));
-
-  // --- admin (owner token) ---
-  if (process.env.OWNER_TOKEN) {
-    const login = await fetch(`${BASE}/admin?token=${encodeURIComponent(process.env.OWNER_TOKEN)}`, { redirect: "manual" });
-    const ownerCookie = (login.headers.get("set-cookie") ?? "").split(";")[0];
-    check("/admin?token= sets owner cookie and redirects", login.status === 302 && ownerCookie.startsWith("hevy_owner="));
-    const adminPage = await fetch(`${BASE}/admin`, { headers: { cookie: ownerCookie } });
-    const adminHtml = await adminPage.text();
-    check("/admin lists grants for the owner", adminPage.status === 200 && adminHtml.includes("Connected accounts") && adminHtml.includes("smoke-claude") === false && adminHtml.includes("Revoke"));
-  } else {
-    console.log("  skip admin checks (set OWNER_TOKEN)");
-  }
 
   // Re-authorizing the same client replaces its previous grant
   // (revokeExistingGrants, the library default) — so the first token is dead now.

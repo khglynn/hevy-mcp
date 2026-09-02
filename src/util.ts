@@ -70,6 +70,20 @@ export function cookie(name: string, value: string, maxAgeSeconds: number): stri
   return `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Lax`;
 }
 
+/** The operator's name for user-facing copy. Set OPERATOR_NAME in wrangler.jsonc `vars`. */
+export function operatorName(env: { OPERATOR_NAME?: string }): string {
+  const n = (env.OPERATOR_NAME ?? "").trim();
+  return n || "the person who runs this server";
+}
+
+/**
+ * Membership key derived from the API key itself, so a returning person can be
+ * recognised BEFORE Hevy is asked about the key. Hash only; the key is never stored.
+ */
+export async function memberKeyFor(apiKey: string): Promise<string> {
+  return "memberkey:" + (await sha256Hex("hevy-key:" + apiKey.toLowerCase())).slice(0, 40);
+}
+
 export function clientIp(request: Request): string {
   return request.headers.get("cf-connecting-ip") ?? "unknown";
 }

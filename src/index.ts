@@ -60,10 +60,12 @@ const provider = new OAuthProvider<AppEnv>({
   // S256 only. Claude and ChatGPT always send S256; `plain` protects nothing.
   allowPlainPKCE: false,
   // A token here is also the decryption key for someone's Hevy credential, so
-  // access tokens are short. Clients refresh silently; every refresh restarts
-  // the refresh token's clock, so anyone active twice a year never re-pastes.
+  // access tokens are short and clients refresh them silently. The refresh
+  // token's clock does NOT slide on use (verified in 0.10.3: the grant's
+  // expiresAt is written once, at code exchange), so this is a hard lifetime:
+  // a year from the day someone connects, then they paste their key again.
   accessTokenTTL: 7 * DAY,
-  refreshTokenTTL: 180 * DAY,
+  refreshTokenTTL: 365 * DAY,
   // DCR client records (claude.ai registers once per connector) outlive grants.
   clientRegistrationTTL: 365 * DAY,
   // Belt and braces for the allowlist enforced at /authorize: a dynamic
