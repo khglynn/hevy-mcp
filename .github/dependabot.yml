@@ -28,11 +28,10 @@ updates:
       interval: "weekly"
       day: "thursday"
     open-pull-requests-limit: 5
+    # GitHub Actions supports only `default-days` (checked against GitHub's Dependabot
+    # options reference, 2026-10-10); the semver-*-days keys are for npm, pip, uv and others.
     cooldown:
       default-days: 7
-      semver-patch-days: 7
-      semver-minor-days: 7
-      semver-major-days: 30
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
