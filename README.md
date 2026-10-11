@@ -24,7 +24,7 @@ To leave, tell your assistant **"disconnect from Hevy"**. That removes the conne
 
 ## Deploy your own
 
-Prerequisites: a free Cloudflare account, Node 22 or newer (wrangler 4.x requires it), and `npx wrangler login` done.
+Prerequisites: a free Cloudflare account, Node 22 or newer (wrangler 4.x requires it), npm 11.10 or newer (`npm install -g npm@11`; older npm ignores the 7-day new-release wait in `.npmrc`), and `npx wrangler login` done.
 
 ```bash
 git clone https://github.com/khglynn/hevy-mcp && cd hevy-mcp

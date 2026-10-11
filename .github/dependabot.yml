@@ -1,0 +1,69 @@
+# Dependabot — the bot that opens pull requests to keep this repo's dependencies current.
+# Stamped from https://github.com/khglynn/repo-standards (templates/dependabot/) — if you
+# want to change the policy for ALL repos, change it there and re-stamp, don't edit here.
+#
+# THE TWO HALVES, because they are easy to confuse:
+#   1. SECURITY updates  — fire when a CVE is published against something you depend on.
+#      They need NO file: they are switched on account-wide for every repo Kevin owns.
+#      They are also EXEMPT from the cooldown below, deliberately: a known-exploited
+#      vulnerability beats the risk of an unsoaked release.
+#   2. VERSION updates   — "keep current" for its own sake. That is what THIS file turns on.
+#
+# What happens to the PRs this file opens is decided by one shared workflow:
+# .github/workflows/dependabot-automerge.yml (a ten-line pointer at repo-standards).
+# Short version: patch and minor merge themselves once CI is green; majors get a label
+# and wait for a person.
+version: 2
+updates:
+  # ---------------------------------------------------------------------------------
+  # The workflows themselves. Actions are code that runs with this repo's token, so they
+  # are a dependency like any other — and one that mostly nobody updates by hand.
+  #
+  # `directory: "/"` is correct even when the workflows are in .github/workflows: for this
+  # ecosystem the directory means "the repo root", not the folder holding the YAML files.
+  # ---------------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    open-pull-requests-limit: 5
+    # GitHub Actions supports only `default-days` (checked against GitHub's Dependabot
+    # options reference, 2026-10-10); the semver-*-days keys are for npm, pip, uv and others.
+    cooldown:
+      default-days: 7
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    labels:
+      - "dependencies"
+  # ---------------------------------------------------------------------------------
+  # JavaScript / TypeScript. "npm" is the ecosystem name for the whole JS registry —
+  # it covers package-lock.json, yarn.lock and pnpm-lock.yaml alike.
+  # ---------------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "thursday"
+    open-pull-requests-limit: 5
+    # Cooldown: Dependabot will not propose a version published more recently than this.
+    # It is the supply-chain soak — most malicious-package incidents are caught and yanked
+    # within days of publication, so simply waiting removes most of the exposure for free.
+    # If the repo also enforces a floor at install time (pnpm's `minimumReleaseAge`, for
+    # example) keep the two numbers EQUAL, or a 3-day PR will fail a 7-day install gate.
+    # Majors wait 30 days on top of needing human review — an x.0.0 release is the least
+    # battle-tested build a library ever ships.
+    cooldown:
+      default-days: 7
+      semver-patch-days: 7
+      semver-minor-days: 7
+      semver-major-days: 30
+    groups:
+      # One pull request for all the low-risk in-major bumps, so the week's routine
+      # updates are one review and one CI run instead of eight. Majors stay separate on
+      # purpose: each one deserves its own look.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    labels:
+      - "dependencies"

@@ -4,6 +4,10 @@
   "private": true,
   "description": "Remote MCP server for the Hevy workout app. Each person connects with their own Hevy API key over OAuth 2.1; stateless Cloudflare Worker; works with Claude, Claude Code, Cursor, and ChatGPT (Business/Enterprise/Edu; Pro read-only).",
   "license": "MIT",
+  "engines": {
+    "node": ">=22",
+    "npm": ">=11.10"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "start": "wrangler dev",
