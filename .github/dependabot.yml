@@ -13,6 +13,8 @@
 # .github/workflows/dependabot-automerge.yml (a ten-line pointer at repo-standards).
 # Short version: patch and minor merge themselves once CI is green; majors get a label
 # and wait for a person.
+# (Not in this repo yet, 2026-10-22: that workflow arrives when the repo is enrolled with
+# repo-standards. Until then every PR this file opens waits for a person.)
 version: 2
 updates:
   # ---------------------------------------------------------------------------------

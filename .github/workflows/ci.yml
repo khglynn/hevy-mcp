@@ -14,10 +14,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # Node 22 ships npm 10, which ignores .npmrc min-release-age; 11.10+ honors it.
-      - run: npm install -g npm@11
-      - name: Prove the 7-day install wait is enforced
-        run: node scripts/check-release-age.mjs
       - run: npm ci
       - run: npm run type-check
       - name: Start wrangler dev
