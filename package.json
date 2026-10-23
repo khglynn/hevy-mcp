@@ -13,14 +13,14 @@
     "test:smoke": "node test/smoke.mjs"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "0.10.3",
-    "@modelcontextprotocol/server": "2.0.0",
-    "agents": "0.22.0",
+    "@cloudflare/workers-oauth-provider": "0.10.4",
+    "@modelcontextprotocol/server": "2.3.1",
+    "agents": "0.28.1",
     "hono": "4.13.13",
-    "zod": "4.5.4"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "typescript": "7.0.2",
-    "wrangler": "4.147.0"
+    "wrangler": "4.151.1"
   }
 }
