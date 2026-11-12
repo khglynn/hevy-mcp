@@ -115,16 +115,16 @@ test("a cached list from before this change (a bare array, maybe cut at 600) is 
 });
 
 test("a library too big to read whole says so instead of looking complete", async () => {
-  const hevy = fakeHevy(5100);
+  const hevy = fakeHevy(2100);
   const { cache } = fakeCache();
   await withFetch(hevy.fetchImpl, async () => {
     const found = await new HevyClient("key", cache).searchExerciseTemplates({ query: "walking lunge" });
     assert.equal(found.total, 0);
-    assert.match(found.note, /only the first 5000 were searched/);
-    assert.equal(hevy.pagesAsked.length, 50);
+    assert.match(found.note, /only the first 2000 were searched/);
+    assert.equal(hevy.pagesAsked.length, 20);
     // The warning survives the cache.
     const again = await new HevyClient("key", cache).searchExerciseTemplates({ query: "walking lunge" });
-    assert.match(again.note, /only the first 5000 were searched/);
-    assert.equal(hevy.pagesAsked.length, 50);
+    assert.match(again.note, /only the first 2000 were searched/);
+    assert.equal(hevy.pagesAsked.length, 20);
   });
 });

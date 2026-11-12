@@ -71,12 +71,14 @@ const PER_REQUEST_TIMEOUT_MS = 10_000;
 /** Hevy's largest page for exercise templates. */
 const TEMPLATE_PAGE_SIZE = 100;
 /**
- * A stop for a runaway loop, not a size anyone should reach: 5,000 templates.
- * The list is read to Hevy's own `page_count`; until 2026-11-12 it stopped at
- * six pages, so a library past 600 (the operator's had 860) lost the rest
- * without a word. If this stop is ever hit, search results say so.
+ * A stop sized to what one call can read: 20 requests fit the 15-second call
+ * budget and a Worker's outgoing-request allowance, retries included, so a
+ * library up to 2,000 templates is read whole. The list is read to Hevy's own
+ * `page_count`; until 2026-11-12 it stopped at six pages, so a library past
+ * 600 (the operator's had 860) lost the rest without a word. Past this stop,
+ * search results say so.
  */
-const TEMPLATE_MAX_PAGES = 50;
+const TEMPLATE_MAX_PAGES = 20;
 /** Bumped when the cached shape changes, so an older entry is read as a miss. */
 const TEMPLATE_CACHE_VERSION = 2;
 
