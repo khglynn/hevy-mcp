@@ -474,12 +474,13 @@ export function buildServer(ctx: ToolContext): McpServer {
     server,
     ctx,
     "search_exercise_templates",
-    "Find exercise templates by name (case-insensitive). Returns matches with their exercise_template_id — the id you need to log a workout or build a routine. Omit `query` to list templates.",
+    "Find exercise templates by name (case-insensitive), across the person's whole library. Returns { page, page_count, total, exercise_templates }; each match carries its exercise_template_id, the id you need to log a workout or build a routine. When page_count is more than 1, ask for the next `page` before deciding an exercise doesn't exist. Omit `query` to list every template, a page at a time.",
     {
       query: z.string().optional().describe('Substring of the exercise title, e.g. "bench".'),
-      limit: z.number().int().min(1).max(100).optional().describe("Max results (default 20)."),
+      limit: z.number().int().min(1).max(100).optional().describe("Results per page (default 20, max 100)."),
+      page,
     },
-    ({ query, limit }, hevy) => hevy.searchExerciseTemplates({ query, limit }),
+    ({ query, limit, page }, hevy) => hevy.searchExerciseTemplates({ query, limit, page }),
   );
 
   reg(

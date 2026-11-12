@@ -6,19 +6,25 @@
  *    templates at 100). `paginate()` loops pages up to a safety cap.
  *  - Rate limiting: Hevy returns 429 with an undocumented, low ceiling.
  *    `request()` retries with backoff (honoring Retry-After when present).
- *  - Template search is the most-called tool and costs up to six upstream
- *    requests per call, so the template list is cached per user in KV.
+ *  - Template search is the most-called tool and reads the whole template
+ *    list (one upstream request per 100 templates), so the list is cached
+ *    per user in KV.
+ *
+ * No constructor parameter properties in this file: `test/hevy.test.mjs`
+ * imports it straight into Node, which strips types but can't rewrite those.
  */
 
 const BASE = "https://api.hevyapp.com/v1";
 
 export class HevyError extends Error {
-  constructor(
-    public status: number,
-    public body: string,
-  ) {
+  status: number;
+  body: string;
+
+  constructor(status: number, body: string) {
     super(`Hevy API ${status}: ${body.slice(0, 200)}`);
     this.name = "HevyError";
+    this.status = status;
+    this.body = body;
   }
 }
 
@@ -62,13 +68,43 @@ type Query = Record<string, string | number | boolean | undefined | null>;
 const CALL_DEADLINE_MS = 15_000;
 const PER_REQUEST_TIMEOUT_MS = 10_000;
 
+/** Hevy's largest page for exercise templates. */
+const TEMPLATE_PAGE_SIZE = 100;
+/**
+ * A stop for a runaway loop, not a size anyone should reach: 5,000 templates.
+ * The list is read to Hevy's own `page_count`; until 2026-11-12 it stopped at
+ * six pages, so a library past 600 (the operator's had 860) lost the rest
+ * without a word. If this stop is ever hit, search results say so.
+ */
+const TEMPLATE_MAX_PAGES = 50;
+/** Bumped when the cached shape changes, so an older entry is read as a miss. */
+const TEMPLATE_CACHE_VERSION = 2;
+
+interface TemplateList {
+  templates: any[];
+  /** False when the read stopped at TEMPLATE_MAX_PAGES with pages left. */
+  complete: boolean;
+}
+
+export interface TemplateSearchResult {
+  page: number;
+  page_count: number;
+  /** How many templates matched, across every page. */
+  total: number;
+  exercise_templates: any[];
+  /** Present only when the library could not be read whole. */
+  note?: string;
+}
+
 export class HevyClient {
   private deadline = Date.now() + CALL_DEADLINE_MS;
+  private apiKey: string;
+  private cache?: TemplateCache;
 
-  constructor(
-    private apiKey: string,
-    private cache?: TemplateCache,
-  ) {}
+  constructor(apiKey: string, cache?: TemplateCache) {
+    this.apiKey = apiKey;
+    this.cache = cache;
+  }
 
   private async request(
     method: string,
@@ -112,12 +148,15 @@ export class HevyClient {
     throw new HevyError(429, "Rate limited after retries");
   }
 
-  /** Loop pages, collecting items found under `key`, up to maxPages. */
+  /**
+   * Loop pages to Hevy's own `page_count`, collecting items found under `key`.
+   * `complete` is false only when maxPages stopped the loop with pages left.
+   */
   private async paginate(
     path: string,
     key: string,
     opts: { pageSize: number; maxPages: number; query?: Query },
-  ): Promise<any[]> {
+  ): Promise<{ items: any[]; complete: boolean }> {
     const items: any[] = [];
     for (let page = 1; page <= opts.maxPages; page++) {
       const data = await this.request("GET", path, {
@@ -126,9 +165,9 @@ export class HevyClient {
       const batch: any[] = data?.[key] ?? [];
       items.push(...batch);
       const pageCount: number = data?.page_count ?? 1;
-      if (page >= pageCount || batch.length === 0) break;
+      if (page >= pageCount || batch.length === 0) return { items, complete: true };
     }
-    return items;
+    return { items, complete: false };
   }
 
   // ---------- reads ----------
@@ -165,33 +204,54 @@ export class HevyClient {
    * per user. Near-static data; the cache is dropped when a custom template is
    * created and expires on its own otherwise.
    */
-  private async allTemplates(): Promise<any[]> {
+  private async allTemplates(): Promise<TemplateList> {
     if (this.cache) {
-      const hit = await this.cache.kv.get<any[]>(this.cache.key, "json");
-      if (Array.isArray(hit)) return hit;
+      // An entry from before the version stamp is a bare array that may have
+      // been cut at 600: it fails this check and the list is read again.
+      const hit = await this.cache.kv.get<{ v?: number; templates?: unknown; complete?: unknown }>(this.cache.key, "json");
+      if (hit && hit.v === TEMPLATE_CACHE_VERSION && Array.isArray(hit.templates)) {
+        return { templates: hit.templates, complete: hit.complete !== false };
+      }
     }
-    const all = await this.paginate("/exercise_templates", "exercise_templates", {
-      pageSize: 100,
-      maxPages: 6, // up to 600 templates — covers Hevy's built-in set + customs
+    const { items, complete } = await this.paginate("/exercise_templates", "exercise_templates", {
+      pageSize: TEMPLATE_PAGE_SIZE,
+      maxPages: TEMPLATE_MAX_PAGES,
     });
-    if (this.cache && all.length > 0) {
-      await this.cache.kv.put(this.cache.key, JSON.stringify(all), { expirationTtl: this.cache.ttlSeconds });
+    if (this.cache && items.length > 0) {
+      await this.cache.kv.put(
+        this.cache.key,
+        JSON.stringify({ v: TEMPLATE_CACHE_VERSION, templates: items, complete }),
+        { expirationTtl: this.cache.ttlSeconds },
+      );
     }
-    return all;
+    return { templates: items, complete };
   }
 
   /**
    * Search exercise templates by title (case-insensitive substring) — how you
-   * get the `exercise_template_id` needed to build workouts/routines.
+   * get the `exercise_template_id` needed to build workouts/routines. Results
+   * come a page at a time (`limit` per page) with the total, so a caller can
+   * tell "no such exercise" from "more on the next page", and can list a whole
+   * library by omitting `query` and walking the pages.
    */
-  async searchExerciseTemplates(q: { query?: string; limit?: number }): Promise<any[]> {
+  async searchExerciseTemplates(q: { query?: string; limit?: number; page?: number }): Promise<TemplateSearchResult> {
     const limit = q.limit ?? 20;
-    const all = await this.allTemplates();
+    const page = q.page ?? 1;
+    const { templates, complete } = await this.allTemplates();
     const needle = q.query?.trim().toLowerCase();
     const matched = needle
-      ? all.filter((t) => String(t.title ?? "").toLowerCase().includes(needle))
-      : all;
-    return matched.slice(0, limit);
+      ? templates.filter((t) => String(t.title ?? "").toLowerCase().includes(needle))
+      : templates;
+    const result: TemplateSearchResult = {
+      page,
+      page_count: Math.max(1, Math.ceil(matched.length / limit)),
+      total: matched.length,
+      exercise_templates: matched.slice((page - 1) * limit, page * limit),
+    };
+    if (!complete) {
+      result.note = `This library has more than ${TEMPLATE_MAX_PAGES * TEMPLATE_PAGE_SIZE} exercise templates and only the first ${templates.length} were searched, so a missing match may still exist in Hevy.`;
+    }
+    return result;
   }
 
   // ---------- writes ----------
