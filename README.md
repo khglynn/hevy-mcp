@@ -91,7 +91,7 @@ Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶
 | write | `create_body_measurement` | Weights in kg, circumferences in centimetres (field names carry the unit) |
 | read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_routine_folder`, `get_exercise_template`, `get_exercise_history`, `get_body_measurements`, `get_body_measurement` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
 | read | `get_workout_events` | Workouts updated or deleted since a date, newest first: the delta feed for keeping a cached copy current without re-reading every page |
-| read | `search_exercise_templates` | Template list cached per user for 6 hours |
+| read | `search_exercise_templates` | Searches the whole library (up to 2,000 exercises; past that the answer says the search was partial); results come a page at a time (`limit` up to 100, `page`) with `page_count` and `total`. Template list cached per user for 6 hours |
 | write | `create_workout`, `update_workout`, `create_routine`, `update_routine`, `create_routine_folder`, `create_exercise_template`, `update_body_measurement` | The `update_*` tools are full overwrites (read first, send back everything you want kept); Hevy has no delete or undo, and no way to edit or delete an exercise template |
 
 ## Clients
