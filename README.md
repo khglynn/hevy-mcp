@@ -92,6 +92,7 @@ Claude ──token──▶ /mcp ──▶ fresh McpServer per request ──▶
 | read | `get_user_info`, `get_workout_count`, `get_workouts`, `get_workout`, `get_routines`, `get_routine`, `get_routine_folders`, `get_routine_folder`, `get_exercise_template`, `get_exercise_history`, `get_body_measurements`, `get_body_measurement` | Paginated where Hevy paginates (`pageSize` ≤ 10) |
 | read | `get_workout_events` | Workouts updated or deleted since a date, newest first: the delta feed for keeping a cached copy current without re-reading every page |
 | read | `search_exercise_templates` | Template list cached per user for 6 hours |
+| write | `create_private_workout` | Logs a workout that is always private (no `is_private` to pass; the server sets it), so it never reaches followers or the feed. Lets an operator allow private logging while denying `create_workout` and `update_workout` by name |
 | write | `create_workout`, `update_workout`, `create_routine`, `update_routine`, `create_routine_folder`, `create_exercise_template`, `update_body_measurement` | The `update_*` tools are full overwrites (read first, send back everything you want kept); Hevy has no delete or undo, and no way to edit or delete an exercise template |
 
 ## Clients

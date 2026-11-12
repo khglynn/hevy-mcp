@@ -562,6 +562,27 @@ export function buildServer(ctx: ToolContext): McpServer {
     (w, hevy) => hevy.createWorkout(w),
   );
 
+  // The same log, but it can only ever be private: there is no is_private to
+  // pass, and the handler sets it after the caller's fields, so nothing sent
+  // here can make it public. For an operator who lets an assistant log
+  // workouts but not post to the person's followers: allow this tool and deny
+  // create_workout and update_workout (a tool-permission rule sees a tool's
+  // name, not whether an optional flag was set).
+  reg(
+    server,
+    ctx,
+    "create_private_workout",
+    "Log a completed workout that only the account owner can see: it is always saved as private and never shown to followers or in the feed. Same fields as create_workout, without is_private. To make it public later, the person changes it in the Hevy app.",
+    {
+      title: z.string(),
+      description: z.string().nullable().optional(),
+      start_time: z.string().describe("ISO 8601 start time."),
+      end_time: z.string().describe("ISO 8601 end time."),
+      exercises: z.array(workoutExercise),
+    },
+    (w, hevy) => hevy.createWorkout({ ...w, is_private: true }),
+  );
+
   reg(
     server,
     ctx,
