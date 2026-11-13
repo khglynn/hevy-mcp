@@ -1,0 +1,57 @@
+# Dependabot auto-merge — this repo's copy is a POINTER, not a policy.
+#
+# The actual merge rules live in one place for all of Kevin's repos:
+#   https://github.com/khglynn/repo-standards/blob/main/.github/workflows/dependabot-automerge.yml
+# Fixing a bug there fixes every repo at once. Copied here 2026-09-11 by `bin/enroll`.
+#
+# Install path in the repo being enrolled: .github/workflows/dependabot-automerge.yml
+#
+# Why `pull_request_target` and not `pull_request`: Dependabot's PRs run with a read-only
+# token and no access to secrets, so a `pull_request` workflow could not approve or merge
+# anything. `pull_request_target` runs in the BASE repo's context with write permission.
+# That is only safe because the called workflow never checks out the pull request's code —
+# do not add a checkout step to either file.
+
+name: dependabot-automerge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write        # enable auto-merge
+  pull-requests: write   # approve, label, comment
+  issues: write          # create the labels (labels are an Issues-API object)
+  # checks: read         # } uncomment BOTH only to turn on the failed-test watch
+  # statuses: read       # } (`watch-minutes` below); it cannot see test results without them
+  # The shared workflow runs with exactly what this block grants — it declares none of its
+  # own, because a called workflow that asks for a scope its caller withheld fails to start.
+
+jobs:
+  automerge:
+    uses: khglynn/repo-standards/.github/workflows/dependabot-automerge.yml@main
+    # ------------------------------------------------------------------------------
+    # THE EXCEPTION POINTS. Delete the `with:` block entirely to take every default.
+    # Uncomment only the line you actually want to differ in THIS repo, and say why.
+    #
+    # Anything you write here is SAFE from `bin/enroll`: once this file points at
+    # repo-standards, re-running enroll leaves it untouched rather than re-stamping the
+    # template over your exception (fixed 2026-09-11 — it used to silently revert it).
+    # ------------------------------------------------------------------------------
+    # with:
+    #   merge-patch: true              # x.y.Z bumps merge themselves. Default true.
+    #   merge-minor: false             # x.Y.z bumps wait for a human. Use in a repo where a minor has bitten you.
+    #   merge-method: merge            # squash (default) | merge | rebase
+    #   require-ci: true               # never auto-merge on a branch with no required check. Leave true.
+    #   stale-strategy: comment        # none (default) | comment — what to do with a PR that is behind main AND red
+    #   watch-minutes: 10              # 0 (default, off) | 1-15 — wait for the tests and label a failure dependabot-ci-failed.
+    #                                  # Turning it on takes three things: this line, the two permission lines above, and
+    #                                  # dependabot-ci-failed in this repo's verdict routine label filter. Costs ~2 private minutes per update PR.
+    #   label-major: major-review-needed
+    #   label-unparsed: dependabot-needs-human
+    #   label-no-ci: no-ci-gate
+    #   label-opted-out: dependabot-opted-out
+    #   label-ci-failed: dependabot-ci-failed
+    #   osv-scan: false                # on by default: stop when OSV knows the update adds a vulnerability or a malicious package.
+    #                                  # Turn off only where the scan cannot work, with the reason on the line.
+    #   label-osv: dependabot-osv-flagged
