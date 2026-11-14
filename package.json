@@ -18,7 +18,7 @@
     "test:smoke": "node test/smoke.mjs"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "0.10.3",
+    "@cloudflare/workers-oauth-provider": "1.2.3",
     "@modelcontextprotocol/server": "2.4.0",
     "agents": "0.33.0",
     "hono": "4.13.16",
