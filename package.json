@@ -4,23 +4,28 @@
   "private": true,
   "description": "Remote MCP server for the Hevy workout app. Each person connects with their own Hevy API key over OAuth 2.1; stateless Cloudflare Worker; works with Claude, Claude Code, Cursor, and ChatGPT (Business/Enterprise/Edu; Pro read-only).",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "dev": "wrangler dev",
     "start": "wrangler dev",
     "deploy": "wrangler deploy",
     "cf-typegen": "wrangler types",
     "type-check": "tsc --noEmit",
+    "test:unit": "node --test test/hevy.test.mjs",
+    "pretest:smoke": "npm run test:unit",
     "test:smoke": "node test/smoke.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "0.10.3",
-    "@modelcontextprotocol/server": "2.0.0",
-    "agents": "0.22.0",
-    "hono": "4.13.13",
-    "zod": "4.5.4"
+    "@modelcontextprotocol/server": "2.4.0",
+    "agents": "0.33.0",
+    "hono": "4.13.16",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "typescript": "7.0.2",
-    "wrangler": "4.147.0"
+    "wrangler": "4.158.0"
   }
 }
