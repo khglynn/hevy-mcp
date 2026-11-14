@@ -272,6 +272,12 @@ async function main() {
   const tok2 = await fetch(`${BASE}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form({ grant_type: "authorization_code", code: code2 ?? "", redirect_uri: redirectUri, client_id: clientId, code_verifier: v2 }) }).then((r) => r.json());
   const list2 = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${tok2.access_token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "tools/list", params: {} }) }).then((r) => r.text());
   check("write grant lists create_workout", list2.includes('"create_workout"'));
+  // The private-only log: listed with writes, and its input has no is_private to turn off.
+  const listed2 = JSON.parse(list2.split("\n").find((l) => l.startsWith("data: "))?.slice(6) ?? list2).result?.tools ?? [];
+  const priv = listed2.find((t) => t.name === "create_private_workout");
+  check("write grant lists create_private_workout", !!priv);
+  check("create_private_workout takes no is_private", !!priv && !("is_private" in (priv.inputSchema?.properties ?? { is_private: 1 })));
+  check("create_workout still takes is_private", "is_private" in (listed2.find((t) => t.name === "create_workout")?.inputSchema?.properties ?? {}));
 
   // A second authorization from the same client must NOT log the first one
   // out: claude.ai is one client id for every claude.ai account, so the
